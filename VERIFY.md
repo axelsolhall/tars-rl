@@ -35,3 +35,26 @@ Setup once: `uv sync`. Needs T3's `tars_rl.body` on the branch.
    the checkered flag appear together on the floor (the flag is the `flag` mocap body in
    `tars_rl.env.arena.build_arena_mjcf`; set `mocap_pos[0] = flag_pos`).
 3. **Checks.** `uv run ruff check src/tars_rl/env tests/env` and `uv run pytest tests/env`.
+
+## T10 TARS in Unreal (`tars_rl.unreal`, `unreal/TarsRl`)
+
+Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run by the agent
+(no Unreal on its side): the C++ compiles for the first time on your machine.
+
+1. **Export the data Unreal reads** (only after a body or sequence change; tests fail if stale):
+   `uv run python -m tars_rl.unreal.export` → `unreal/TarsRl/Content/TarsData/{body_spec,sequence}.json`.
+2. **Build and play.** Right-click `unreal/TarsRl/TarsRl.uproject` → *Generate Xcode Project*,
+   then double-click the `.uproject` and accept "rebuild modules". Press **Play**.
+   - Check: TARS (3 grey slabs) stands still for 10 s, then swings and slides its arms
+     through the sequence. The top-left line shows `t`, tilt and `standing` / `fell at`.
+   - Nothing is replayed: `TarsActor` only sets joint drive targets each tick.
+   - At 32 s the screen shows `Recorded …/Saved/TarsRuns/unreal_poses.csv` (also on Stop).
+3. **Compare to MuJoCo.**
+   `uv run python -m tars_rl.unreal.eval --unreal unreal/TarsRl/Saved/TarsRuns/unreal_poses.csv --out runs/unreal`
+   - Prints stand time and per-joint tracking (mean/max error, corr) for both engines, and the
+     max/mean position (cm) and rotation (deg) gap per body.
+   - Baseline: `--reference-only` gives MuJoCo alone (stands 32 s, hinge mean err ≈ 0.014 rad).
+   - A joint with corr ≈ −1: flip `HingeSign` / `SlideSign` on the TarsActor (A74).
+     Sluggish or overshooting joints: tune `AngularGainScale` / `LinearGainScale` (A72).
+   - Your call: are the gaps small enough that a MuJoCo-trained policy is worth trying in Unreal?
+4. **Checks.** `uv run ruff check .` and `uv run pytest tests/unreal -q`.

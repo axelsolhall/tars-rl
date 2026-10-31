@@ -50,3 +50,16 @@ is saturated MJX lags CPU by up to ~4 mm for ~0.1 s (check this again if T14's s
 
 Reward weights (progress 1.0 per m, upright 0.02, fall 1.0, effort 0.005) are untuned values that
 run; T14 tunes them.
+
+## TARS in Unreal (`tars_rl.unreal` + `unreal/TarsRl`, T10)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A56 | TARS runs in Unreal under Unreal's own physics (Chaos); later the trained policy runs inside Unreal. | confirmed | A1 | `unreal/TarsRl` | eval with `--unreal`: stand time, pose gap | stream MuJoCo poses into Unreal instead |
+| A57 | Unreal builds the TARS actor from the same BodySpec JSON as the MuJoCo model. | confirmed | A8 | `unreal.export`, `TarsActor::LoadSpec` | `tests/unreal` (exported copy not stale) | — |
+| A69 | Each arm hangs on two chained Chaos constraints (central→hinge→invisible 10 g carriage→slide→arm), standing in for MuJoCo's hinge-then-slide joints. | proposed | A56, A57 | `TarsActor::BuildBody` | per-joint tracking error in Unreal | change `BuildBody` only |
+| A70 | Comparison sequence: 10 s neutral stand, then ±0.5 rad hinge swings, ±4 cm slides, opposite hinges, one combo; 0.5 s ramps, 1.5 s holds (32 s). | proposed | | `unreal.sequence.default_sequence` | MuJoCo reference stands all 32 s | edit `default_sequence`, re-export |
+| A71 | The Unreal project is C++ for UE 5.5 on the Mac, engine template map, 60 Hz fixed frame rate, physics substeps ≤ 2 ms. | proposed | | `TarsRl.uproject`, `Config/DefaultEngine.ini` | it builds and plays | edit uproject / ini |
+| A72 | Unreal drive gains = BodySpec SI gains × factors in actor properties (angular ×1e4 incl. torque limit, linear ×1, force limit ×100). | proposed | A56 | `ATarsActor` `AngularGainScale` / `LinearGainScale` | Unreal tracking error vs MuJoCo's | change the properties in the editor |
+| A73 | Unreal records slab poses in its own frame (cm, y right, FQuat xyzw); only the Python eval converts to MuJoCo's frame. | proposed | | `TarsActor::RecordSample`, `unreal.poses.from_unreal_csv` | `tests/unreal` round trip | change `from_unreal_csv` only |
+| A74 | Hinge / slide drive directions sit behind `HingeSign` / `SlideSign` actor properties, default +1. | proposed | | `ATarsActor` | eval per-joint corr ≈ +1 (≈ −1 means flip) | set the property to −1 |

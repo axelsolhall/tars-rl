@@ -1,0 +1,8 @@
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+.vs/
+.vscode/
+*.xcworkspace
+*.sln
