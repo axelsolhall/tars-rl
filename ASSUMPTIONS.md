@@ -63,3 +63,16 @@ run; T14 tunes them.
 | A72 | Unreal drive gains = BodySpec SI gains × factors in actor properties (angular ×1e4 incl. torque limit, linear ×1, force limit ×100). | proposed | A56 | `ATarsActor` `AngularGainScale` / `LinearGainScale` | Unreal tracking error vs MuJoCo's | change the properties in the editor |
 | A73 | Unreal records slab poses in its own frame (cm, y right, FQuat xyzw); only the Python eval converts to MuJoCo's frame. | proposed | | `TarsActor::RecordSample`, `unreal.poses.from_unreal_csv` | `tests/unreal` round trip | change `from_unreal_csv` only |
 | A74 | Hinge / slide drive directions sit behind `HingeSign` / `SlideSign` actor properties, default +1. | proposed | | `ATarsActor` | eval per-joint corr ≈ +1 (≈ −1 means flip) | set the property to −1 |
+
+## First training run (`tars_rl.train`, T15)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A58 | TARS learns with MuJoCo Playground's ready-made PPO trainer (brax). | confirmed | A1 | `train.run`, `train.adapter` | full run beats random and stand-still in `train.eval` | swap the trainer in `run.train`; adapter, eval and policy folder stay |
+| A59 | Training settings start as copies of Playground's settings for its walking robots (Go1 joystick), changed only if TARS fails. | confirmed | A1 | `train.config.PROFILES["full"]` | learning curve in `progress.jsonl` | edit the `full` profile |
+| A60 | A trained policy is one folder that also records what it was trained with (`policy.pkl`, `meta.json`, `progress.jsonl`, `rollout.npz`). | confirmed | A8 | `train.policy` | `test_policy_folder_roundtrip` | change `save_policy` / `load_policy` |
+| A61 | Each run logs progress to one file at regular intervals (`progress.jsonl`: PPO metrics plus our flag eval on fixed held-out flags). | confirmed | | `train.run` | `test_read_progress`; eval prints the curve | change `progress_fn` / `policy_params_fn` |
+| A62 | Full runs on the 5080 are started from the Mac by one SSH script. | confirmed | | `scripts/train_remote.sh` | `start` / `status` / `fetch` against the PC | edit the script |
+
+Training uses Playground's auto-reset with `full_reset=True` (`run.WRAP_FOR_TRAINING`), so every
+episode draws a new flag as A22 says; the default would replay each env's first flag all run.

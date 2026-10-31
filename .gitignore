@@ -153,7 +153,7 @@ activemq-data/
 .env
 .envrc
 .venv
-env/
+/env/
 venv/
 ENV/
 env.bak/
@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# tars-rl: training runs, policies, rollouts (large; reproduce with tars_rl.train.run)
+runs/

@@ -58,3 +58,21 @@ Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run 
      Sluggish or overshooting joints: tune `AngularGainScale` / `LinearGainScale` (A72).
    - Your call: are the gaps small enough that a MuJoCo-trained policy is worth trying in Unreal?
 4. **Checks.** `uv run ruff check .` and `uv run pytest tests/unreal -q`.
+
+## T15 First training run (`tars_rl.train`)
+
+1. **Mac smoke test.** `uv run python -m tars_rl.train.run --profile smoke --seed 0 --out runs/smoke`
+   (~1 min), then `uv run python -m tars_rl.train.eval --policy runs/smoke --episodes 64 --seed 0`.
+   Only proves the pipeline runs: 2,560 steps cannot learn, so "beats random and still: NO" is expected.
+   Measured 2026-10-31: trained 0 % success, 81.2 % falls, closed −1.3 %; random 100 % falls;
+   stand-still 0 % falls, return +20.0 (above the trained policy's +4.0).
+2. **Full run on the 5080.** Free the GPU first, then from the Mac:
+   `TARS_HOST=user@host scripts/train_remote.sh start 0`, `... status`, `... fetch`, then the eval
+   with `--policy runs/full-seed0`. Sign-off: success rate and distance closed clearly above the
+   random and stand-still columns.
+3. **Learning curve.** The eval prints it (from `progress.jsonl`): success should rise then flatten.
+   Watch for return rising while distance left does not shrink: standing still earns the
+   0.02/step upright bonus, +20 over a full episode (A18's signpost).
+4. **Recorded run.** `runs/<name>/rollout.npz` (Trajectory + `flag_pos`): render with T9 and check
+   TARS moves toward the flag.
+5. **Checks.** `uv run ruff check src/tars_rl/train tests/train` and `uv run pytest tests/train`.
