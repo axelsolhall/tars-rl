@@ -31,8 +31,8 @@ def build_arena_mjcf(spec: BodySpec) -> str:
     h = spec.central.height
     pole_h, pole_r = 1.2 * h, 0.006
     cloth = (0.002, 0.18 * h, 0.12 * h)  # half sizes: thin along x, out along y, down along z
-    assets = """    <texture name="flag_checker" type="2d" builtin="checker" rgb1="1 1 1" rgb2="0 0 0"
-             width="64" height="64"/>
+    assets = """    <texture name="flag_checker" type="2d" builtin="checker"
+             rgb1="1 1 1" rgb2="0 0 0" width="64" height="64"/>
     <material name="flag_checker" texture="flag_checker" texrepeat="3 2"/>
     <material name="flag_pole" rgba=".85 .85 .85 1"/>
 """

@@ -1,5 +1,25 @@
 # VERIFY — what needs Axel's eyes
 
+## T3 TARS body (`tars_rl.body`)
+
+Setup once: `uv sync`
+
+1. **Look and motion (Mac viewer).**
+   - `uv run python -m tars_rl.body.view` holds the neutral pose; in the right panel, under Control,
+     drag `left_hinge_act` / `left_slide_act` etc. to move each joint.
+   - `uv run python -m tars_rl.body.view --demo` plays a scripted swing + slide.
+   - Check: central body, two arms on either side, both swinging about one horizontal axis through
+     the body's centre and sliding along their own length. Does it read as TARS?
+2. **Numbers.** `uv run python -m tars_rl.body.eval --seconds 10` (add `--json out.json` to save).
+   - Section 1: powered max tilt at neutral (should be ~0) vs unpowered; push rows show whether
+     the actuators matter when disturbed.
+   - Section 2: step tracking error, rise time, overshoot for all four joints.
+   - Section 3: COM shift with the left arm slid fully up.
+   - Section 4: MJX vs CPU max difference and MJX steps/s.
+   - Exit code is non-zero if powered stand, tracking or MJX agreement fails.
+3. **Regenerate the contract** after editing `default_spec`: `uv run python -m tars_rl.body.mjcf`
+   (tests fail if `body/assets/tars_v1.{json,xml}` are stale).
+
 ## T13 Flag arena (`tars_rl.env`)
 
 Setup once: `uv sync`. Needs T3's `tars_rl.body` on the branch.

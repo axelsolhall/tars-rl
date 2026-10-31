@@ -2,6 +2,32 @@
 
 IDs match loopdesk. "Confirmed" = decided by Axel; "proposed" = a default picked to keep moving.
 
+## TARS body (`tars_rl.body`, T3)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A1 | Simulation and training run in MuJoCo with MuJoCo Playground (MJX/JAX). | confirmed | | `tars_rl.body` | eval section 4: MJX vs CPU agreement and MJX steps/s | swap simulator; BodySpec stays, MJCF generator is replaced |
+| A2 | Each hinge is driven by a position actuator, one float target angle per step. | confirmed | | `mjcf._actuator`, `spec.Servo` | eval section 2 tracking | change actuator type in `_actuator` |
+| A5 | The hinge axis sits at mid-height of the slabs. | confirmed | | `mjcf.build_mjcf` (`hinge_z`) | `test_hinges_share_axis_through_centre` | one line in `build_mjcf` |
+| A7 | Default body size is printable scale (about 30–40 cm tall); default 36 cm. | confirmed | | `spec.default_spec` | `test_defaults_follow_assumptions` | edit `default_spec` / pass another JSON |
+| A8 | The body contract is an MJCF generated from a versioned BodySpec JSON (joint names, ranges, actuator order). | confirmed | | `spec.py`, `mjcf.py`, `body/assets/tars_v1.{json,xml}` | `test_committed_assets_match_generator`, `test_model_matches_spec` | |
+| A9 | uv + pyproject.toml, src/ layout, ruff, pytest. | confirmed | | repo | `uv run ruff check .`, `uv run pytest` | |
+| A14 | One central rigid piece plus two side arms, each on one hinge. | confirmed | A1 | `mjcf.build_mjcf` | viewer | new BodySpec version |
+| A39 | Both arm hinges share one horizontal axis (y) through the centre of the central body. | confirmed | A14 | `mjcf.build_mjcf` | `test_hinges_share_axis_through_centre` | |
+| A40 | Each arm has a slide joint along its own length (hinge point moves along the arm). | confirmed | A14 | `mjcf.build_mjcf` (slide after hinge) | `test_slide_moves_arm_along_its_length_when_swung` | |
+| A41 | Each slide is a position actuator (one float target per step), modelling the non-backdrivable screw. | confirmed | A2 | `mjcf._actuator`, `slide_servo` | eval section 2 tracking | |
+| A42 | Default slide range is ±25 % of arm length from centred (±90 mm at 36 cm). | confirmed | A8 | `spec.default_spec` | `test_defaults_follow_assumptions` | |
+| A53 | Default slab sizes and masses: central 9×9×36 cm, 0.8 kg; arms 9×4.5×36 cm, 0.35 kg each; 4 mm gap. | proposed | A7 | `spec.default_spec` | weigh/measure the printed parts later | edit `default_spec`; regenerate assets |
+| A54 | Default hinge range is ±150°. | proposed | A8 | `spec.default_spec` | do trained policies hit the limit? | edit `default_spec` |
+| A52 | At the neutral pose (all targets 0) every slab stands on the floor: slabs are equal height and slides are centred. | proposed | A5, A40 | `mjcf.build_mjcf`, `spec.neutral` | eval section 1 | set `spec.neutral` or slab heights |
+| A55 | Servo defaults: hinge kp 8 Nm/rad, kv 0.3, ±3 Nm; slide kp 3000 N/m, kv 300, ±20 N (a slow screw: full stroke ≈ 0.25 s). | proposed | A2, A41 | `spec.default_spec` | eval sections 2–3: rise time / error, tilt while lifting | edit `default_spec` |
+
+Measured 2026-10-31: the first slide default (kv 40, ±80 N) threw an arm at up to 3.5 m/s, and the
+recoil tipped the body over when an arm was lifted ≥ 60 mm. With kv 300 / ±20 N it stays within 0.6°.
+Driving a slide fully *down* (−90 mm) still tips the body; that is expected, since it pushes one arm
+9 cm into the floor. MJX vs CPU agree to ≈ 1 mm on an upright rollout, but while the slide force
+is saturated MJX lags CPU by up to ~4 mm for ~0.1 s (check this again if T14's sim-to-sim numbers look off).
+
 ## Flag arena (`tars_rl.env`, T13)
 
 | ID | Assumption | Status | Depends | Where | How to test | If wrong |
