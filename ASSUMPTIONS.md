@@ -102,6 +102,16 @@ ackley5 2.35 vs 12.3 with the optimum outside the starting box).
 | A108 | Every trial of a campaign trains with the same seed and is scored on the same held-out flags; a trial that errors or gives NaN scores −1. | proposed | | `campaign.run_trial`, `score.FAILED` | T20 retrains winners on fresh seeds (A87) | vary the seed per trial in `run_trial` |
 | A109 | The tuner searches 7 PPO settings (lr, entropy, discount, unroll, updates per batch, grad clip, reward scale) plus each tower's block, depth, width, activation and norm; env counts and batch sizes stay as the profile sets them. The box starts centred on the Go1 settings and T15's networks. | proposed | A59, A77, A92 | `tune.tars_space` | eval section 2: a centre stuck at a range edge means the range is too narrow | edit `SPACE` / `PPO_KEYS` |
 
+## G3 comparison (`tars_rl.tune.compare`, T20)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A86 | The G3 graphs retrain the published start, the final best and a few evenly spaced best-so-far points in between. | confirmed | T19 | `compare.pick_points` | `test_points_are_start_evenly_spaced_best_so_far_and_final_best`; signpost: in-between points no better than the start | change `pick_points` |
+| A87 | Every retrained point trains from scratch on the same seeds until its held-out score stops improving. | confirmed | T19 | `compare.compare`, `compare.train_until_plateau` | signpost: a campaign winner loses or ties on fresh seeds | change the stop rule (A110) or seeds (A111) |
+| A110 | A retrained point stops once its validation quality (success/closed 2:1 mix on the run's own curve flags) misses its best by 0.01 for 5 evals in a row (eval every 10M steps, at most 400M on the 5080) and keeps its best eval's params. | proposed | A87 | `compare.PROFILES`, `compare.train_until_plateau` | eval section 2: every run stops `plateau`, not `budget` | edit `compare.PROFILES` (new `--out`) |
+| A111 | The comparison retrains on fresh seeds (campaign seed + 1, + 2, ...) and scores on fresh held-out flags (campaign score seed + 1). | proposed | A87, A108 | `compare.compare` | `compare.json` lists both; `test_compare_retrains_each_trial_once_per_fresh_seed_and_resumes` | `--seed-base` / `--score-seed` |
+| A112 | On the 5080 the comparison retrains 5 points on 3 seeds each (at most 15 runs). | proposed | A86 | `scripts/train_remote.sh compare` | time one run (`wall_s` in `result.json`) | change `--points` / `--seeds` |
+
 ## First training run (`tars_rl.train`, T15)
 
 | ID | Assumption | Status | Depends | Where | How to test | If wrong |

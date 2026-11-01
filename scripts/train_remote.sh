@@ -4,6 +4,8 @@
 #   TARS_HOST=user@host scripts/train_remote.sh start [seed] [name]   # sync code, start in background
 #   TARS_HOST=user@host scripts/train_remote.sh tune [trials] [name]  # start or resume a tuning
 #                                                                     # campaign (default 48, tune-full)
+#   TARS_HOST=user@host scripts/train_remote.sh compare [campaign] [name]  # retrain its points on
+#                                                       # fresh seeds (default tune-full, compare-full)
 #   TARS_HOST=user@host scripts/train_remote.sh status [name]         # tail the run's log
 #   TARS_HOST=user@host scripts/train_remote.sh fetch  [name]         # copy runs/<name> back here
 #
@@ -19,15 +21,20 @@ min_free=${TARS_MIN_FREE_MIB:-12000}
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 case "$cmd" in
-  start|tune)
+  start|tune|compare)
     if [ "$cmd" = start ]; then
       seed=${2:-0}
       name=${3:-full-seed$seed}
       run=(tars_rl.train.run --profile full --seed "$seed" --out "runs/$name")
-    else  # the same command again resumes a stopped campaign from its trial records (T19)
+    elif [ "$cmd" = tune ]; then  # the same command again resumes a stopped campaign (T19)
       trials=${2:-48}
       name=${3:-tune-full}
       run=(tars_rl.tune.campaign --profile full --trials "$trials" --seed 0 --out "runs/$name")
+    else  # the G3 comparison (T20, A112); the same command again resumes it too
+      campaign=${2:-tune-full}
+      name=${3:-compare-full}
+      run=(tars_rl.tune.compare --campaign "runs/$campaign" --profile full --seeds 3 --points 5
+           --out "runs/$name")
     fi
     rsync -az --delete --exclude .git --exclude .venv --exclude runs --exclude .loopdesk \
       --exclude '.env*' "$root/" "$host:$dir/"
@@ -64,9 +71,10 @@ EOF
     rsync -az "$host:$dir/runs/$name" "$root/runs/"
     echo "fetched runs/$name; score a run: uv run python -m tars_rl.train.eval --policy runs/$name"
     echo "  or a campaign: uv run python -m tars_rl.tune.eval_campaign --campaign runs/$name"
+    echo "  or a comparison: uv run python -m tars_rl.tune.eval_compare --compare runs/$name"
     ;;
   *)
-    sed -n '2,12p' "$0"
+    sed -n '2,14p' "$0"
     exit 2
     ;;
 esac

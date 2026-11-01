@@ -23,14 +23,14 @@ def _clip(x: float) -> float:
     return x if math.isnan(x) else max(-1.0, min(1.0, x))  # min/max would turn NaN into 1
 
 
-def _quality(success: float, closed: float) -> float:
+def quality(success: float, closed: float) -> float:
     ws, wc = WEIGHTS["success"], WEIGHTS["closed"]
     return (ws * success + wc * _clip(closed)) / (ws + wc)
 
 
 def curve_speed(curve: list[dict]) -> float:
     """Normalised area under the curve's quality over steps (trapezoid, first to last point)."""
-    pts = sorted((c["step"], _quality(c["success_rate"], c["closed_frac"])) for c in curve)
+    pts = sorted((c["step"], quality(c["success_rate"], c["closed_frac"])) for c in curve)
     if not pts:
         return 0.0
     if len(pts) == 1 or pts[-1][0] == pts[0][0]:

@@ -188,3 +188,27 @@ render ≈ 0.3–0.9 s per sim s.
    (`=succ`, `+clos`, `+spd`) adding up to `total` (A106).
    - [ ] You can see from those columns why a trial ranked where it did.
 5. **Checks.** `uv run ruff check src/tars_rl/tune tests/tune` and `uv run pytest tests/tune`.
+
+## T20 G3 comparison (`tars_rl.tune.compare`)
+
+1. **Mac smoke comparison.** After T19's smoke campaign (`runs/tune_smoke`):
+   `uv run python -m tars_rl.tune.compare --campaign runs/tune_smoke --profile smoke --seeds 2
+   --points 3 --out runs/compare_smoke`, then `uv run python -m tars_rl.tune.eval_compare --compare
+   runs/compare_smoke`. Only proves the pipeline: smoke runs cannot learn, so success is 0 % and both
+   verdicts say NO.
+2. **5080 comparison.** After the 5080 campaign (`runs/tune-full`), free the GPU, then from the Mac:
+   `TARS_HOST=user@host scripts/train_remote.sh compare tune-full` (folder `runs/compare-full`, 5
+   points x 3 fresh seeds, A112), `... status compare-full`, `... fetch compare-full`, then the eval
+   with `--compare runs/compare-full`.
+   - [ ] Section 1 / top-left of `compare.png`: mean held-out success climbs from the published start
+     (red) through the in-between points to the final best (blue), and the start's and final best's
+     seed dots don't overlap (both verdict lines YES).
+   - [ ] Section 2: every run stopped `plateau`, not `budget` (A110); if not, it was still learning.
+   - [ ] `compare.png` reads without the code: axes with units, legend naming the published start
+     and the final best, learning curves in millions of steps, the box path with each retrained
+     trial's round marked.
+   - [ ] `final_best.mp4` shows the tuned TARS reaching the flag (the eval prints "reached flag YES"
+     for the recorded episode).
+3. **Resume.** Run the same `compare` command again: every finished (trial, seed) logs
+   `already done, not retrained` (`test_compare_retrains_each_trial_once_per_fresh_seed_and_resumes`).
+4. **Checks.** `uv run ruff check src/tars_rl/tune tests/tune` and `uv run pytest tests/tune`.
