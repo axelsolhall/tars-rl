@@ -64,6 +64,20 @@ run; T14 tunes them.
 | A73 | Unreal records slab poses in its own frame (cm, y right, FQuat xyzw); only the Python eval converts to MuJoCo's frame. | proposed | | `TarsActor::RecordSample`, `unreal.poses.from_unreal_csv` | `tests/unreal` round trip | change `from_unreal_csv` only |
 | A74 | Hinge / slide drive directions sit behind `HingeSign` / `SlideSign` actor properties, default +1. | proposed | | `ATarsActor` | eval per-joint corr ≈ +1 (≈ −1 means flip) | set the property to −1 |
 
+## Self-guiding search (`tars_rl.tune`, T17)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A75 | The tuner is Bayesian optimisation in a box that re-centres on the best point and resizes. | confirmed | | `tune.search.BoxSearch` | `eval_search` table: box vs random, same tries | swap `BoxSearch._propose` / `tell` |
+| A76 | Pick-one settings are numbers in [0, 1] split into equal bins, in the same box as numeric settings. | confirmed | | `tune.space.Choice` | `test_choice_bins_split_unit_range_equally`; eval `mixed5` | change `Choice.decode/encode` |
+| A88 | The GP is fit to score ranks mapped to normal quantiles; batches are Thompson-sampling picks among candidates in the box. | proposed | A75 | `search._normal_scores`, `BoxSearch._propose` | eval table (rosenbrock4 has huge values) | edit those two functions |
+| A89 | The random baseline samples the whole space; the box starts 0.4 wide in the middle. | proposed | | `search.random_search`, `eval_search` | eval section 2 starting `dist` | change the baseline or start box in the eval |
+| A90 | Box rules: start 0.4 of each range, ×2 after 2 improving rounds, ÷2 after 3 non-improving ones, restart at 0.4 around the best below 0.4/32. | proposed | A75 | `search.SearchConfig`, `BoxSearch.tell` | eval section 2: shrinks only once the gap stalls | edit `SearchConfig` defaults |
+
+Measured 2026-10-31 (`--budget 200 --repeats 5 --seed 0`, ≈ 70 s on the Mac): the box is closer to
+the known best than random search on 8/8 functions at 200 tries (e.g. hartmann6 gap 0.0019 vs 1.07,
+ackley5 2.35 vs 12.3 with the optimum outside the starting box).
+
 ## First training run (`tars_rl.train`, T15)
 
 | ID | Assumption | Status | Depends | Where | How to test | If wrong |

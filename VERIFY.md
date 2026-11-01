@@ -59,6 +59,20 @@ Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run 
    - Your call: are the gaps small enough that a MuJoCo-trained policy is worth trying in Unreal?
 4. **Checks.** `uv run ruff check .` and `uv run pytest tests/unreal -q`.
 
+## T17 Self-guiding search (`tars_rl.tune`)
+
+Setup once: `uv sync`. Pure numpy; trials are test functions, no RL.
+
+1. **Box vs random.** `uv run python -m tars_rl.tune.eval_search --budget 200 --repeats 5 --seed 0`
+   (≈ 70 s; add `--json runs/tune/eval_search.json` to save, `--only branin levy4` for a subset).
+   - Section 1: median gap to the known best after 25/50/100/200 tries, box next to random.
+     Check: the box is closer on most functions (2026-10-31: 8/8). Exit code 1 if it wins on fewer than half.
+2. **Box path.** Section 2 prints, per function, each round's tries, best gap, distance from the box
+   centre to the optimum (unit coordinates) and side length.
+   - Check: `dist` falls toward 0 (for ackley5/levy4/styblinski4/mixed5 the optimum starts outside
+     the box), and `shrink` only appears once the gap stalls; `restart` early would mean it collapsed.
+3. **Checks.** `uv run ruff check src/tars_rl/tune tests/tune` and `uv run pytest tests/tune`.
+
 ## T15 First training run (`tars_rl.train`)
 
 1. **Mac smoke test.** `uv run python -m tars_rl.train.run --profile smoke --seed 0 --out runs/smoke`
