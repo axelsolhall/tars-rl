@@ -76,3 +76,20 @@ Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run 
 4. **Recorded run.** `runs/<name>/rollout.npz` (Trajectory + `flag_pos`): render with T9 and check
    TARS moves toward the flag.
 5. **Checks.** `uv run ruff check src/tars_rl/train tests/train` and `uv run pytest tests/train`.
+
+## T9 — Rollout to MP4 (`tars_rl.viz`)
+
+On the Mac:
+
+    uv run python -m tars_rl.viz.eval --out /tmp/tars_sample.mp4
+    open /tmp/tars_sample.mp4
+
+On the Ubuntu box, headless over SSH (`MUJOCO_GL=egl` is set automatically when there is no `DISPLAY`):
+
+    uv run python -m tars_rl.viz.eval --out /tmp/tars_sample.mp4
+
+- [ ] TARS is visible for the whole clip (the camera tracks the `central` body).
+- [ ] Both arm hinges swing in phase; both arm slides move a quarter period later.
+  (No policy: the 0.5 rad swing tips TARS over at ~1.5 s and it lies flat after; that is expected.)
+- [ ] Eval prints `frames N (expected N) OK` (4 s at 30 fps = 120 frames).
+- [ ] `render speed` (s render per sim s) noted on the Mac: ____  and on the Ubuntu box: ____
