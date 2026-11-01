@@ -59,13 +59,17 @@ def render_mp4(
     fps: int = 30,
     width: int = 640,
     height: int = 480,
+    camera: mujoco.MjvCamera | None = None,  # default: track the central body
+    mocap_pos: np.ndarray | None = None,  # (nmocap, 3), held for the whole clip (e.g. the flag)
 ) -> RenderStats:
     if traj.qpos.shape[1] != model.nq:
         raise ValueError(f"Trajectory nq {traj.qpos.shape[1]} != model nq {model.nq}")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     data = mujoco.MjData(model)
-    cam = tracking_camera(model)
+    if mocap_pos is not None:
+        data.mocap_pos[:] = mocap_pos
+    cam = camera if camera is not None else tracking_camera(model)
     idx = frame_indices(traj, fps)
 
     start = time.perf_counter()

@@ -90,3 +90,11 @@ ackley5 2.35 vs 12.3 with the optimum outside the starting box).
 
 Training uses Playground's auto-reset with `full_reset=True` (`run.WRAP_FOR_TRAINING`), so every
 episode draws a new flag as A22 says; the default would replay each env's first flag all run.
+
+## Rollout videos (`tars_rl.viz`, T9 / T16)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A10 | A rollout is a versioned Trajectory .npz: per-frame qpos, timestep, BodySpec version. | confirmed | A8 | `viz.trajectory` | `test_trajectory_roundtrip` | change `Trajectory` and its loaders |
+| A46 | Quick-check MP4s use MuJoCo's offscreen renderer and imageio-ffmpeg. | confirmed | A1 | `viz.render` | `viz.eval` frame count OK | swap `render_mp4` |
+| A93 | Flag-arena videos use one fixed camera per clip that frames TARS's whole path and the flag, instead of following TARS. | proposed | A46, A51 | `viz.flag.framing_camera` | `test_render_flag_mp4_shows_flag_and_body`; watch `--flag-sample` | change `framing_camera` or pass another camera to `render_mp4` |

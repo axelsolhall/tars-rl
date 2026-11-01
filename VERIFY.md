@@ -107,3 +107,27 @@ On the Ubuntu box, headless over SSH (`MUJOCO_GL=egl` is set automatically when 
   (No policy: the 0.5 rad swing tips TARS over at ~1.5 s and it lies flat after; that is expected.)
 - [ ] Eval prints `frames N (expected N) OK` (4 s at 30 fps = 120 frames).
 - [ ] `render speed` (s render per sim s) noted on the Mac: ____  and on the Ubuntu box: ____
+
+## T16 — Flag-arena video (`tars_rl.viz`)
+
+On the Mac (headless on the Ubuntu box works the same way, as in T9):
+
+    uv run python -m tars_rl.viz.eval --flag-sample --out /tmp/tars_flag.mp4
+    open /tmp/tars_flag.mp4
+
+The eval runs one fixed random-policy episode in the flag arena (seed 0, `--seed` to change),
+saves it as a flag rollout next to the video (`/tmp/tars_flag.npz`), and renders from that file.
+Any saved flag rollout renders the same way, e.g. a trained run:
+`uv run python -m tars_rl.viz.eval --rollout runs/<name>/rollout.npz --out /tmp/run.mp4`.
+
+Measured 2026-11-01 on the Mac (seed 0): 83 frames × 0.02 s = 1.66 s (the random policy falls),
+flag at x +1.159, y +0.561 m, distance 1.288 → 1.173 m (closer by 0.115 m), 50 frames OK,
+render ≈ 0.3–0.9 s per sim s.
+
+- [ ] TARS and the checkered flag are both in view for the whole clip (one fixed camera
+  frames TARS's path and the flag, A93).
+- [ ] The flag stands where the eval's `flag` line says (for seed 0: right of TARS and a
+  little nearer the camera), and its distance from TARS looks like the printed one
+  (≈ 3.5 body heights at the start; the body is 0.36 m tall).
+- [ ] The `flag distance` line matches the video: start → end, TARS ends `closer` or `farther`.
+- [ ] Eval prints `frames N (expected N) OK`.
