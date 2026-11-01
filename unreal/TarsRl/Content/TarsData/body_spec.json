@@ -5,13 +5,13 @@
     "depth": 0.09,
     "width": 0.09,
     "height": 0.36,
-    "mass": 0.8
+    "mass": 2.0
   },
   "arm": {
     "depth": 0.09,
     "width": 0.045,
     "height": 0.36,
-    "mass": 0.35
+    "mass": 0.5
   },
   "arm_gap": 0.004,
   "hinge_range": [
@@ -25,12 +25,14 @@
   "hinge_servo": {
     "kp": 8.0,
     "kv": 0.3,
-    "force_limit": 3.0
+    "force_limit": 1.5,
+    "max_speed": 6.0
   },
   "slide_servo": {
     "kp": 3000.0,
     "kv": 300.0,
-    "force_limit": 20.0
+    "force_limit": 10.0,
+    "max_speed": null
   },
   "friction": 0.8,
   "timestep": 0.002,

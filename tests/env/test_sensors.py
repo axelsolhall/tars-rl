@@ -71,14 +71,16 @@ def test_mark2_standing_reads_gravity_and_bottom_edges(env2):
                    "left_bottom_back", "right_bottom_front", "right_bottom_back"}
 
 
-def test_mark2_last_action_is_the_clipped_action(env2):
+def test_mark2_last_action_is_the_servo_target_sent(env2):
+    # The servo target after the top-speed cap: it is hidden state the next step starts from.
     reset, step = jax.jit(env2.reset), jax.jit(env2.step)
     s = reset(jax.random.PRNGKey(0))
     assert np.allclose(s.obs[env2.channel_slices()["last_action"]], 0.0, atol=1e-6)
     a = jnp.array([0.3, -0.7, 2.0, -0.1])
     s = step(s, a)
-    assert np.allclose(s.obs[env2.channel_slices()["last_action"]], jnp.clip(a, -1, 1),
-                       atol=1e-5)
+    cap = float(env2._ctrl_max_step[0] / env2._ctrl_half[0])  # hinge, in action units
+    want = jnp.array([cap, -cap, 1.0, -0.1])
+    assert np.allclose(s.obs[env2.channel_slices()["last_action"]], want, atol=1e-5)
 
 
 def test_arm_accelerometer_gives_arm_tilt(env2):

@@ -60,7 +60,9 @@ def test_mujoco_stands_through_whole_sequence(spec, run):
     assert not r["fell"] and r["stand_s"] == pytest.approx(seq.duration)
     assert r["max_tilt_stand_deg"] < 1.0
     for e in r["tracking"].values():
-        assert e["corr"] > 0.9
+        # 0.85, not 0.9: the 1.5 Nm hobby servo holding a 0.5 kg arm slid out is near its torque
+        # limit and lags up to ~0.45 rad (hinge corr ~0.89, Axel's realism change 2026-11-01).
+        assert e["corr"] > 0.85
 
 
 def test_joints_from_poses_match_qpos(spec, run):

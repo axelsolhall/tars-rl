@@ -14,6 +14,9 @@ holds one `NetSpec` per tower, so the tuner (T19) can shape policy and value sep
 tower ends in a plain Dense head (action-distribution params or one value) and uses brax's
 lecun_uniform init, so `mlp` without a norm is exactly brax's MLP and T15's policies.
 
+A `NetworkSpec` may also add memory (`memory=gru-25`, see `tars_rl.train.memory`): both towers
+then read a window of past frames through their own history encoder.
+
 `make_ppo_networks` returns brax's `PPONetworks`, so brax PPO trains them unchanged (A58).
 """
 
@@ -27,6 +30,8 @@ import jax.numpy as jnp
 from brax.training import distribution, networks, types
 from brax.training.agents.ppo import networks as ppo_networks
 from flax import linen
+
+from tars_rl.train.memory import HistoryEncoder, MemorySpec
 
 BLOCKS = ("mlp", "simba", "bro")
 ACTIVATIONS: dict[str, Callable] = {
@@ -95,29 +100,34 @@ class NetSpec:
 class NetworkSpec:
     policy: NetSpec = NetSpec(depth=4, width=128)
     value: NetSpec = NetSpec(depth=5, width=256)
+    memory: MemorySpec = MemorySpec()
 
     def check(self) -> NetworkSpec:
         self.policy.check()
         self.value.check()
+        self.memory.check()
         return self
 
     def __str__(self) -> str:
-        return f"policy={self.policy} value={self.value}"
+        mem = "" if self.memory.kind == "none" else f" memory={self.memory}"
+        return f"policy={self.policy} value={self.value}{mem}"
 
     @classmethod
     def parse(cls, text: str) -> NetworkSpec:
-        """'policy=<NetSpec> value=<NetSpec>', or one NetSpec for both towers."""
+        """'policy=<NetSpec> value=<NetSpec> [memory=<MemorySpec>]', or one NetSpec for both."""
         parts = dict(p.split("=", 1) for p in text.split()) if "=" in text else None
         if parts is None:
             return cls(NetSpec.parse(text), NetSpec.parse(text))
-        return cls(NetSpec.parse(parts["policy"]), NetSpec.parse(parts["value"]))
+        mem = MemorySpec.parse(parts.get("memory", "none"))
+        return cls(NetSpec.parse(parts["policy"]), NetSpec.parse(parts["value"]), mem)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: Mapping) -> NetworkSpec:
-        return cls(NetSpec(**d["policy"]), NetSpec(**d["value"])).check()
+        mem = MemorySpec(**d["memory"]) if "memory" in d else MemorySpec()
+        return cls(NetSpec(**d["policy"]), NetSpec(**d["value"]), mem).check()
 
 
 class Tower(linen.Module):
@@ -154,6 +164,33 @@ class Tower(linen.Module):
         return dense(self.out_size, "head")(x)
 
 
+class MemoryTower(linen.Module):
+    """A history encoder in front of a Tower (towers without memory stay plain Towers, so
+    their parameter names, and every policy saved before memory existed, are unchanged)."""
+
+    memory: MemorySpec
+    frame: int
+    spec: NetSpec
+    out_size: int
+
+    @linen.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        x = HistoryEncoder(self.memory, self.frame, name="memory")(x)
+        return Tower(self.spec, self.out_size, name="tower")(x)
+
+
+def _tower(spec: NetworkSpec, net: NetSpec, out_size: int, obs_size: int) -> linen.Module:
+    mem = spec.memory
+    if mem.kind == "none":
+        return Tower(net, out_size)
+    if not isinstance(obs_size, int):  # brax may pass a shape, (n,)
+        obs_size = int(obs_size[-1])
+    if obs_size % mem.steps:
+        raise ValueError(f"observation size {obs_size} is not {mem.steps} frames; train with "
+                         f"EnvConfig.history_steps={mem.steps} (run.train sets it)")
+    return MemoryTower(mem, obs_size // mem.steps, net, out_size)
+
+
 def _feed_forward(module: linen.Module, obs_size: int, preprocess, squeeze: bool):
     """A brax FeedForwardNetwork around `module`: normalise obs, then apply (as brax does)."""
 
@@ -179,10 +216,12 @@ def make_ppo_networks(
     spec.check()
     dist = distribution.NormalTanhDistribution(event_size=action_size)
     return ppo_networks.PPONetworks(
-        policy_network=_feed_forward(Tower(spec.policy, dist.param_size), observation_size,
-                                     preprocess_observations_fn, squeeze=False),
-        value_network=_feed_forward(Tower(spec.value, 1), observation_size,
-                                    preprocess_observations_fn, squeeze=True),
+        policy_network=_feed_forward(
+            _tower(spec, spec.policy, dist.param_size, observation_size), observation_size,
+            preprocess_observations_fn, squeeze=False),
+        value_network=_feed_forward(
+            _tower(spec, spec.value, 1, observation_size), observation_size,
+            preprocess_observations_fn, squeeze=True),
         parametric_action_distribution=dist,
     )
 

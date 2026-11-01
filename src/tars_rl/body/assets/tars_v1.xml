@@ -23,20 +23,20 @@
     <body name="central" pos="0 0 0.18">
       <freejoint name="root"/>
       <geom name="central_geom" type="box" size="0.045 0.045 0.18"
-            mass="0.8" material="central"/>
+            mass="2" material="central"/>
       <site name="imu" pos="0 0 0"/>
       <body name="left_arm" pos="0 0.0715 0">
         <joint name="left_hinge" type="hinge" axis="0 1 0" range="-2.617993878 2.617993878"/>
         <joint name="left_slide" type="slide" axis="0 0 1" range="-0.09 0.09"/>
         <geom name="left_arm_geom" type="box" size="0.045 0.0225 0.18"
-              mass="0.35" material="arm"/>
+              mass="0.5" material="arm"/>
         <site name="left_foot" pos="0 0 -0.18"/>
       </body>
       <body name="right_arm" pos="0 -0.0715 0">
         <joint name="right_hinge" type="hinge" axis="0 1 0" range="-2.617993878 2.617993878"/>
         <joint name="right_slide" type="slide" axis="0 0 1" range="-0.09 0.09"/>
         <geom name="right_arm_geom" type="box" size="0.045 0.0225 0.18"
-              mass="0.35" material="arm"/>
+              mass="0.5" material="arm"/>
         <site name="right_foot" pos="0 0 -0.18"/>
       </body>
     </body>
@@ -46,9 +46,9 @@
     <exclude body1="central" body2="right_arm"/>
   </contact>
   <actuator>
-    <position name="left_hinge_act" joint="left_hinge" kp="8" kv="0.3" ctrlrange="-2.617993878 2.617993878" forcerange="-3 3"/>
-    <position name="right_hinge_act" joint="right_hinge" kp="8" kv="0.3" ctrlrange="-2.617993878 2.617993878" forcerange="-3 3"/>
-    <position name="left_slide_act" joint="left_slide" kp="3000" kv="300" ctrlrange="-0.09 0.09" forcerange="-20 20"/>
-    <position name="right_slide_act" joint="right_slide" kp="3000" kv="300" ctrlrange="-0.09 0.09" forcerange="-20 20"/>
+    <position name="left_hinge_act" joint="left_hinge" kp="8" kv="0.3" ctrlrange="-2.617993878 2.617993878" forcerange="-1.5 1.5"/>
+    <position name="right_hinge_act" joint="right_hinge" kp="8" kv="0.3" ctrlrange="-2.617993878 2.617993878" forcerange="-1.5 1.5"/>
+    <position name="left_slide_act" joint="left_slide" kp="3000" kv="300" ctrlrange="-0.09 0.09" forcerange="-10 10"/>
+    <position name="right_slide_act" joint="right_slide" kp="3000" kv="300" ctrlrange="-0.09 0.09" forcerange="-10 10"/>
   </actuator>
 </mujoco>

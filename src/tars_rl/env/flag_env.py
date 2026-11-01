@@ -121,6 +121,11 @@ class FlagEnv:
         lo, hi = m.actuator_ctrlrange.T
         self._ctrl_mid = jnp.asarray((lo + hi) / 2)
         self._ctrl_half = jnp.asarray((hi - lo) / 2)
+        # Servo top speed as the largest target move per control step; inf = no cap.
+        speeds = [self.spec.hinge_servo.max_speed if j.endswith("hinge") else
+                  self.spec.slide_servo.max_speed for j in self.spec.joint_names]
+        self._ctrl_max_step = jnp.asarray(
+            [np.inf if s is None else s * self.config.ctrl_dt for s in speeds])
 
         d = mujoco.MjData(m)
         neutral = self.spec.neutral_ctrl()
@@ -147,8 +152,23 @@ class FlagEnv:
         return int(self.mj_model.nu)
 
     @property
-    def observation_size(self) -> int:
+    def frame_size(self) -> int:
+        """One step's senses; `channel_slices` index into this (the newest frame)."""
         return sum(c.size for c in self.channels)
+
+    @property
+    def observation_size(self) -> int:
+        return self.frame_size * max(1, self.config.history_steps)
+
+    def _window(self, prev_obs: jax.Array | None, frame: jax.Array) -> jax.Array:
+        """Memory (history_steps > 0): the obs is the last K frames, oldest first, so it carries
+        its own history and needs no extra state; a reset fills the window with the first frame."""
+        k = self.config.history_steps
+        if k == 0:
+            return frame
+        if prev_obs is None:
+            return jnp.tile(frame, k)
+        return jnp.concatenate([prev_obs[self.frame_size:], frame])
 
     def channel_slices(self) -> dict[str, slice]:
         out, i = {}, 0
@@ -162,8 +182,13 @@ class FlagEnv:
         return self.config.ctrl_dt
 
     # ---- pieces --------------------------------------------------------------------------
-    def action_to_ctrl(self, action: jax.Array) -> jax.Array:
-        return self._ctrl_mid + self._ctrl_half * jnp.clip(action, -1.0, 1.0)
+    def action_to_ctrl(self, action: jax.Array, prev_ctrl: jax.Array | None = None) -> jax.Array:
+        """Action -> servo targets; with `prev_ctrl`, each target moves at most the servo's top
+        speed per step (a real servo turns at its rated speed, not instantly)."""
+        ctrl = self._ctrl_mid + self._ctrl_half * jnp.clip(action, -1.0, 1.0)
+        if prev_ctrl is None:
+            return ctrl
+        return prev_ctrl + jnp.clip(ctrl - prev_ctrl, -self._ctrl_max_step, self._ctrl_max_step)
 
     def sample_flag(self, rng: jax.Array, centre_xy: jax.Array | None = None) -> jax.Array:
         """Uniform direction, uniform distance in [min, max] body heights (A22) from `centre_xy`,
@@ -201,7 +226,7 @@ class FlagEnv:
             return (data.sensordata[self._sensor_adr["touch"]]
                     > self.config.touch_threshold_n).astype(jnp.float32)
         if name == "last_action":
-            return (data.ctrl - self._ctrl_mid) / self._ctrl_half  # the clipped action sent
+            return (data.ctrl - self._ctrl_mid) / self._ctrl_half  # servo target sent, speed-capped
         return data.sensordata[self._sensor_adr[name]]
 
     def observe(self, data: mjx.Data, flag_pos: jax.Array, rng: jax.Array | None = None,
@@ -238,7 +263,8 @@ class FlagEnv:
         k_flag = jax.random.fold_in(rng, 2)
         none = jnp.zeros((), dtype=jnp.int32)
         return State(
-            data=data, obs=self.observe(data, flag_pos, k_obs), reward=zero, done=no,
+            data=data, obs=self._window(None, self.observe(data, flag_pos, k_obs)),
+            reward=zero, done=no,
             success=no, fell=no, truncated=no, flag_pos=flag_pos, dist=dist, start_dist=dist,
             step=jnp.zeros((), dtype=jnp.int32),
             metrics={k: zero for k in METRIC_KEYS}, tags=none, first_tag=none - 1,
@@ -247,7 +273,7 @@ class FlagEnv:
 
     def step(self, state: State, action: jax.Array) -> State:
         c, w = self.config, self.config.reward
-        data = state.data.replace(ctrl=self.action_to_ctrl(action))
+        data = state.data.replace(ctrl=self.action_to_ctrl(action, state.data.ctrl))
         def physics(_, d: mjx.Data) -> mjx.Data:
             return mjx.step(self.mjx_model, d)
 
@@ -285,7 +311,7 @@ class FlagEnv:
         rng, k_obs = jax.random.split(state.rng) if state.rng is not None else (None, None)
         sensed = state.data if c.sensor_delay_steps else data
         return State(
-            data=data, obs=self.observe(data, flag_pos, k_obs, sensed),
+            data=data, obs=self._window(state.obs, self.observe(data, flag_pos, k_obs, sensed)),
             reward=sum(metrics.values()), done=done, success=success,
             fell=fell, truncated=truncated, flag_pos=flag_pos, dist=next_dist,
             start_dist=start_dist, step=step, metrics=metrics,

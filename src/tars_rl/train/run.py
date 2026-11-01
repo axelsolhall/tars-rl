@@ -20,6 +20,7 @@ import json
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 
@@ -95,6 +96,8 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
     progress = out / PROGRESS_FILE
     progress.write_text("")
 
+    # Memory: the env builds the window the network's history encoder reads (same length).
+    env_config = replace(env_config or EnvConfig(), history_steps=cfg.network.memory.steps)
     env = FlagEnv(config=env_config)
     penv = PlaygroundFlagEnv(env)
     inference = make_inference(env.observation_size, env.action_size, cfg.network,

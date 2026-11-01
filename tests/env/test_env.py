@@ -48,6 +48,17 @@ def test_action_maps_onto_ctrlrange(env):
     assert np.allclose(env.action_to_ctrl(5 * jnp.ones(4)), hi, atol=1e-6)  # clipped
 
 
+def test_servo_target_moves_at_most_top_speed(env, fns):
+    reset, step = fns
+    s = reset(jax.random.PRNGKey(0))
+    s2 = step(s, jnp.ones(4))  # full swing asked for in one step
+    moved = np.abs(np.asarray(s2.data.ctrl - s.data.ctrl))
+    hinge_cap = env.spec.hinge_servo.max_speed * env.dt
+    assert np.allclose(moved[:2], hinge_cap, atol=1e-6)  # hinges: capped at 6 rad/s
+    lo, hi = env.mj_model.actuator_ctrlrange.T
+    assert np.allclose(moved[2:], (hi - lo)[2:] / 2, atol=1e-6)  # slides: no cap (damped instead)
+
+
 def test_flag_placement_follows_a22(env):
     flags = jax.vmap(env.sample_flag)(jax.random.split(jax.random.PRNGKey(0), 2000))
     r = np.linalg.norm(np.asarray(flags[:, :2]) - env.start_xy, axis=1) / env.height

@@ -40,6 +40,9 @@ class EnvConfig:
     # (flip probability for the binary touch channel), and 0 or 1 policy step of sensor delay.
     sensor_noise: dict[str, float] = field(default_factory=dict)
     sensor_delay_steps: int = 0
+    # Memory: the observation is the last this-many frames (0 = the current frame only). Set from
+    # the network description's `memory=<kind>-<steps>` by training, so env and network agree.
+    history_steps: int = 0
 
     def __post_init__(self) -> None:
         if self.flags not in FLAG_MODES:

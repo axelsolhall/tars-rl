@@ -28,11 +28,13 @@ class Box:
 
 @dataclass(frozen=True)
 class Servo:
-    """Position actuator (A2, A41): kp in N/m or Nm/rad, kv damping, force limit."""
+    """Position actuator (A2, A41): kp in N/m or Nm/rad, kv damping, force limit, and top speed
+    (rad/s or m/s; None = unlimited). MuJoCo has no speed cap, so the env slews the target."""
 
     kp: float
     kv: float
     force_limit: float
+    max_speed: float | None = None
 
 
 @dataclass(frozen=True)
@@ -103,14 +105,17 @@ def default_spec() -> BodySpec:
     return BodySpec(
         version=SCHEMA_VERSION,
         name="tars_v1",
-        central=Box(depth=0.09, width=0.09, height=height, mass=0.8),
-        arm=Box(depth=0.09, width=0.045, height=height, mass=0.35),
+        # Built weight incl. battery and electronics, 3 kg (Axel 2026-11-01: 1.5 kg was too light).
+        central=Box(depth=0.09, width=0.09, height=height, mass=2.0),
+        arm=Box(depth=0.09, width=0.045, height=height, mass=0.5),
         arm_gap=0.004,
         hinge_range=(-math.radians(150), math.radians(150)),
         slide_range=(-slide, slide),
-        # Hobby-servo scale: ~2 Nm hinge; the screw slide is stiff because it is not
-        # backdrivable (A41), and heavily damped because a screw is slow: with kv=40 / 80 N a
-        # full-stroke step threw the arm at 3.5 m/s and the recoil tipped the body (A55).
-        hinge_servo=Servo(kp=8.0, kv=0.3, force_limit=3.0),
-        slide_servo=Servo(kp=3000.0, kv=300.0, force_limit=20.0),
+        # MG996R-class hobby servo (Axel 2026-11-01): 1.5 Nm, 6 rad/s (~0.17 s per 60 deg); with
+        # 3 Nm and no speed cap the arms whirled like spokes at 1.3 m/s. The screw slide is stiff
+        # because it is not backdrivable (A41), and heavily damped because a screw is slow: with
+        # kv=40 / 80 N a full-stroke step threw the arm at 3.5 m/s and the recoil tipped the
+        # body (A55).
+        hinge_servo=Servo(kp=8.0, kv=0.3, force_limit=1.5, max_speed=6.0),
+        slide_servo=Servo(kp=3000.0, kv=300.0, force_limit=10.0),
     )
