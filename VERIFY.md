@@ -36,6 +36,19 @@ Setup once: `uv sync`. Needs T3's `tars_rl.body` on the branch.
    `tars_rl.env.arena.build_arena_mjcf`; set `mocap_pos[0] = flag_pos`).
 3. **Checks.** `uv run ruff check src/tars_rl/env tests/env` and `uv run pytest tests/env`.
 
+## T24 Mark 2 senses (`tars_rl.env.sensors`)
+
+1. **Senses table and tipped checks.** `uv run python -m tars_rl.env.eval --obs mark2 --episodes 16 --seed 0`
+   - After the usual baseline table it lists the 11 mark2 channels (43 floats): name, units,
+     nominal range and the range seen on a scripted run (stand, wiggle, lie on front, lie on back).
+   - Lying on its front: the five `*_front` edges should light up (central bottom, both arms'
+     bottom and top) and all three accelerometers should read about (−9.81, 0, 0); lying on its
+     back, the `*_back` edges and (+9.81, 0, 0). Exit code 1 if any of these fails.
+2. **Default unchanged.** `test_default_obs_is_benchmark_bit_for_bit` compares the default 17
+   floats with T13's formula with `array_equal` over a random rollout, and checks that the default
+   model has no added sites or sensors. Re-check against `runs/full-seed0` on the PC
+   (`train.eval` should give the same numbers as before).
+
 ## T10 TARS in Unreal (`tars_rl.unreal`, `unreal/TarsRl`)
 
 Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run by the agent

@@ -6,6 +6,10 @@ Runs a batch of episodes in MJX for two reference policies on the same flags:
 and prints success, fall and timeout rates, start and final flag distance, distance closed,
 episode length and return. These are the floor a trained policy (T14) must beat. Also saves
 episode 0 of the random policy as a flag rollout (.npz, A51) for the MP4 / Unreal players.
+
+`--obs mark2` runs the same baselines with the Mark 2 senses and then the senses check
+(`env.sense_check`): every channel's name, units and range, and the tipped-over touch and
+accelerometer checks. The exit code is non-zero if a tipped check fails.
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ import numpy as np
 from tars_rl.env.config import EnvConfig
 from tars_rl.env.flag_env import FlagEnv, State
 from tars_rl.env.rollout import FlagRollout
+from tars_rl.env.sense_check import report_senses, sense_check
+from tars_rl.env.sensors import OBS_SETS
 
 Policy = Callable[[jax.Array, jax.Array], jax.Array]  # (rng, obs batch) -> action batch
 
@@ -101,7 +107,8 @@ def run(episodes: int, seed: int, config: EnvConfig | None = None,
     res: dict = {
         "spec": env.spec.name, "body_spec_version": env.spec.version, "seed": seed,
         "body_height_m": env.height, "max_steps": env.config.max_steps, "ctrl_dt": env.dt,
-        "config": env.config.to_dict(), "policies": {},
+        "config": env.config.to_dict(), "obs_set": env.config.obs,
+        "observation_size": env.observation_size, "policies": {},
     }
     raw = {}
     for name, make in (("random", random_policy), ("zero", zero_policy)):
@@ -114,13 +121,16 @@ def run(episodes: int, seed: int, config: EnvConfig | None = None,
         r = raw["random"]
         FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0]).save(rollout_path)
         res["rollout"] = str(rollout_path)
+    if any(c.needs_mark2 for c in env.channels):
+        res["senses"] = sense_check(env, seed)
     return res
 
 
 def report(res: dict) -> None:
     print(f"Flag arena baseline: {res['spec']} v{res['body_spec_version']}, "
           f"body height {res['body_height_m']:.2f} m, seed {res['seed']}, "
-          f"{res['max_steps']} steps x {res['ctrl_dt']} s max\n")
+          f"{res['max_steps']} steps x {res['ctrl_dt']} s max, "
+          f"observation '{res['obs_set']}' ({res['observation_size']} floats)\n")
     rows = [
         ("episodes", "episodes", "{:.0f}"),
         ("success rate", "success_rate", "{:.1%}"),
@@ -143,6 +153,8 @@ def report(res: dict) -> None:
         print(f"{label:<24}" + "".join(f"{c:>12}" for c in cells))
     if "rollout" in res:
         print(f"\nSample rollout (random policy, episode 0): {res['rollout']}")
+    if "senses" in res:
+        report_senses(res["senses"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -150,17 +162,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--episodes", type=int, default=64)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--seconds", type=float, help="episode length (default: EnvConfig)")
+    p.add_argument("--obs", default="default", choices=sorted(OBS_SETS),
+                   help="observation set (mark2 also runs the senses check)")
     p.add_argument("--rollout", default="runs/env/random_ep0.npz",
                    help="where to save the sample rollout ('' to skip)")
     p.add_argument("--json", help="also write the results to this JSON file")
     a = p.parse_args(argv)
-    cfg = EnvConfig(episode_seconds=a.seconds) if a.seconds else EnvConfig()
+    cfg = EnvConfig(obs=a.obs, **({"episode_seconds": a.seconds} if a.seconds else {}))
     res = run(a.episodes, a.seed, cfg, a.rollout or None)
     report(res)
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
         Path(a.json).write_text(json.dumps(res, indent=2) + "\n")
-    return 0
+    return 0 if res.get("senses", {}).get("ok", True) else 1
 
 
 if __name__ == "__main__":

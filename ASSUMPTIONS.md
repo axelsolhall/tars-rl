@@ -48,6 +48,18 @@ is saturated MJX lags CPU by up to ~4 mm for ~0.1 s (check this again if T14's s
 | A67 | The env is a small hand-written MJX reset/step class, not a `mujoco_playground` dependency. | proposed | A1 | `env.flag_env` | T14 trains on it through a thin wrapper | subclass Playground's `MjxEnv`; bodies of reset/step stay |
 | A68 | Each episode starts TARS in the same neutral pose at rest at the origin. | proposed | | `FlagEnv.reset` | held-out-seed success of trained policies | add qpos noise in `reset` |
 
+### Mark 2 senses (`tars_rl.env.sensors`, T24)
+
+`EnvConfig.obs` picks the observation set (`default` = A44's 17 floats, unchanged; `mark2` = 43).
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A99 | Each touch edge is a box site along the edge, 10 % of the thinnest slab dimension thick (9 mm), reading 1 above 0.1 N normal force. | proposed | | `sensors.edge_radius`, `EnvConfig.touch_threshold_n` | eval `--obs mark2` tipped checks | edit those two |
+| A100 | The last-action channel is read back from `data.ctrl` (the clipped action sent), so it needs no carried state. | proposed | A63 | `FlagEnv._channel` | `test_mark2_last_action_is_the_clipped_action` | carry the action in `State` and the adapter |
+| A101 | In mark2 the central IMU replaces default's exact gravity vector and body angular velocity. | proposed | A44 | `sensors.OBS_SETS` | T25 run with / without `gravity` | add them to the mark2 tuple |
+| A102 | Each arm's IMU is fixed at the arm's origin (on the hinge axis when the slide is centred). | proposed | A39, A40 | `sensors.add_mark2_sensors` | `test_arm_accelerometer_gives_arm_tilt` | move the site |
+| A103 | Sensor noise (per channel) and a 0/1-step delay are `EnvConfig` values, off by default; noise needs `State.rng`, which the training adapter does not carry yet. | proposed | | `EnvConfig.sensor_noise`, `sensor_delay_steps` | `test_noise_and_delay_are_off_by_default_and_work_when_set` | pass an rng through `train.adapter` |
+
 Reward weights (progress 1.0 per m, upright 0.02, fall 1.0, effort 0.005) are untuned values that
 run; T14 tunes them.
 

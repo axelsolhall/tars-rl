@@ -27,6 +27,13 @@ class EnvConfig:
     success_heights: float = 1.0  # A23: centre within this many heights of the flag (xy)
     fall_tilt_rad: float = math.radians(60.0)  # A24
     reward: RewardConfig = field(default_factory=RewardConfig)
+    # Senses (T24): which observation set, see `sensors.OBS_SETS`.
+    obs: str = "default"
+    touch_threshold_n: float = 0.1  # an edge reads 1 when its normal contact force exceeds this
+    # Sim-to-real knobs, off by default: channel name -> Gaussian std in the channel's units
+    # (flip probability for the binary touch channel), and 0 or 1 policy step of sensor delay.
+    sensor_noise: dict[str, float] = field(default_factory=dict)
+    sensor_delay_steps: int = 0
 
     @property
     def max_steps(self) -> int:
