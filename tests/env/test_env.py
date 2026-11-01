@@ -94,11 +94,65 @@ def test_zero_action_stands_and_times_out(env, fns):
     assert int(s.step) == env.config.max_steps
 
 
-def test_success_when_flag_within_one_height(env, fns):
+def test_default_flag_mode_is_chain(env):
+    assert env.config.flags == "chain"
+    with pytest.raises(ValueError):
+        EnvConfig(flags="many")
+
+
+def test_single_mode_success_ends_episode():
+    env = FlagEnv(config=EnvConfig(episode_seconds=0.2, flags="single"))
+    flag = jnp.array([env.start_xy[0] + 0.5 * env.height, env.start_xy[1], 0.0])
+    s = env.step(env.reset(jax.random.PRNGKey(0), flag), jnp.zeros(4))
+    assert bool(s.success) and bool(s.done) and not bool(s.truncated)
+    assert np.allclose(s.flag_pos, flag) and int(s.tags) == 1 and int(s.first_tag) == 1
+
+
+def test_chain_tag_respawns_flag_and_goes_on(env, fns):
     reset, step = fns
     flag = jnp.array([env.start_xy[0] + 0.5 * env.height, env.start_xy[1], 0.0])
-    s = step(reset(jax.random.PRNGKey(0), flag), jnp.zeros(4))
-    assert bool(s.success) and bool(s.done) and not bool(s.truncated)
+    s0 = reset(jax.random.PRNGKey(0), flag)
+    s = step(s0, jnp.zeros(4))
+    assert bool(s.success) and not bool(s.done) and int(s.tags) == 1 and int(s.first_tag) == 1
+    # new flag 3-10 heights from TARS's centre, on the floor, also in the mocap body
+    centre = np.asarray(s.data.xpos[env._central][:2])
+    new = np.asarray(s.flag_pos)
+    r = np.linalg.norm(new[:2] - centre) / env.height
+    assert 3.0 - 1e-4 <= r <= 10.0 + 1e-4 and new[2] == 0.0
+    assert np.allclose(s.data.mocap_pos[env._mocap], new)
+    assert float(s.dist) == pytest.approx(r * env.height, rel=1e-5)
+    assert float(s.start_dist) == pytest.approx(float(s.dist))
+    # the flag sensor points at the new flag
+    assert np.allclose(s.obs[:3], ground_truth_flag(
+        s.data.xpos[env._central], s.data.xmat[env._central], s.flag_pos), atol=1e-5)
+    # progress on the tag step is against the old flag: no jump
+    old_dist = float(np.linalg.norm(centre - np.asarray(flag[:2])))
+    assert float(s.metrics["progress"]) == pytest.approx(float(s0.dist) - old_dist, abs=1e-6)
+    assert abs(float(s.metrics["progress"])) < 0.05
+    assert float(s.metrics["tag"]) == 0.0  # tag bonus defaults to 0
+    # next step: progress against the new flag, no second tag
+    s2 = step(s, jnp.zeros(4))
+    assert not bool(s2.success) and int(s2.tags) == 1 and int(s2.first_tag) == 1
+    assert np.allclose(s2.flag_pos, new)
+    assert float(s2.metrics["progress"]) == pytest.approx(float(s.dist) - float(s2.dist), abs=1e-6)
+
+
+def test_chain_episode_ends_on_timeout_only(env, fns):
+    reset, step = fns
+    s = reset(jax.random.PRNGKey(2))
+    for _ in range(env.config.max_steps):
+        assert not bool(s.done)
+        s = step(s, jnp.zeros(4))
+    assert bool(s.truncated) and bool(s.done) and int(s.tags) == 0 and int(s.first_tag) == -1
+
+
+def test_tag_bonus_is_a_config_value():
+    from tars_rl.env.config import RewardConfig
+    env = FlagEnv(config=EnvConfig(episode_seconds=0.2, reward=RewardConfig(tag=2.0)))
+    flag = jnp.array([env.start_xy[0] + 0.5 * env.height, env.start_xy[1], 0.0])
+    s = env.step(env.reset(jax.random.PRNGKey(0), flag), jnp.zeros(4))
+    assert float(s.metrics["tag"]) == 2.0
+    assert float(s.reward) == pytest.approx(sum(float(v) for v in s.metrics.values()), abs=1e-6)
 
 
 def test_fall_when_tilted_past_60_degrees(env, fns):
@@ -131,6 +185,11 @@ def test_rollout_roundtrip_keeps_trajectory_keys(tmp_path):
     assert np.allclose(r.flag_pos, [1, 2, 0])
     with np.load(p) as d:
         assert {"version", "qpos", "dt", "body_spec_version", "flag_pos"} <= set(d.files)
+    assert r.flag_track is None
+    track = np.zeros((5, 3))
+    track[3:, 0] = 1.0  # the flag moved at frame 3
+    r = FlagRollout.load(FlagRollout(q, 0.02, 1, track[0], track).save(tmp_path / "c.npz"))
+    assert np.allclose(r.flag_track, track)
 
 
 def test_eval_runs_small(tmp_path):
@@ -145,3 +204,5 @@ def test_eval_runs_small(tmp_path):
         res["policies"]["zero"]["start_dist_m"])
     r = FlagRollout.load(tmp_path / "ep0.npz")
     assert r.qpos.shape[1] == 7 + 4 and len(r.qpos) >= 2
+    assert r.flag_track.shape == (len(r.qpos), 3) and np.allclose(r.flag_track[0], r.flag_pos)
+    assert res["flags"] == "chain" and "tags_per_ep" in res["policies"]["zero"]

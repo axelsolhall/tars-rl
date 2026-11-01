@@ -1,5 +1,6 @@
 """Flag-arena rollout -> MP4: the arena model with the flag where it stood (A51) and a camera
-that frames TARS and the flag for the whole clip."""
+that frames TARS and the flag for the whole clip. A chain-mode rollout (T26) carries a per-frame
+flag track: the flag moves after each tag and the camera frames every flag of the chain."""
 
 from __future__ import annotations
 
@@ -47,8 +48,9 @@ def central_xy(model: mujoco.MjModel, qpos: np.ndarray, body: str = CENTRAL_BODY
 
 
 def flag_distances(model: mujoco.MjModel, qpos: np.ndarray, flag_pos: np.ndarray) -> np.ndarray:
-    """Per-frame xy distance from the central body to the flag (same as FlagEnv's `dist`)."""
-    return np.linalg.norm(central_xy(model, qpos) - np.asarray(flag_pos)[:2], axis=1)
+    """Per-frame xy distance from the central body to the flag (same as FlagEnv's `dist`).
+    `flag_pos` is one flag (3,) or a per-frame track (frames, 3)."""
+    return np.linalg.norm(central_xy(model, qpos) - np.asarray(flag_pos)[..., :2], axis=1)
 
 
 def framing_camera(
@@ -68,8 +70,9 @@ def framing_camera(
     which hangs in the arena's y-z plane, face-on (view along x): max of the worse of the two.
     """
     xy = central_xy(model, qpos)
-    flag_xy = np.asarray(flag_pos)[:2]
-    pts = np.vstack([xy, flag_xy])
+    flags_xy = np.atleast_2d(np.asarray(flag_pos))[:, :2]  # one flag, or every one of a chain
+    flag_xy = flags_xy[0]
+    pts = np.vstack([xy, flags_xy])
     lo, hi = pts.min(axis=0), pts.max(axis=0)
     centre = (lo + hi) / 2
     radius = float(np.linalg.norm(hi - lo)) / 2 + pad
@@ -103,6 +106,11 @@ def render_flag_mp4(
     _body_id(model, FLAG_BODY)
     if model.nmocap != 1:
         raise ValueError(f"expected one mocap body (the flag), model has {model.nmocap}")
-    cam = framing_camera(model, rollout.qpos, rollout.flag_pos, width, height)
+    if rollout.flag_track is None:  # rollouts saved before T26: one flag for the whole clip
+        cam = framing_camera(model, rollout.qpos, rollout.flag_pos, width, height)
+        return render_mp4(model, traj, out, fps=fps, width=width, height=height,
+                          camera=cam, mocap_pos=np.asarray(rollout.flag_pos)[None, :])
+    track = np.asarray(rollout.flag_track)  # chain mode: the flag moves after each tag
+    cam = framing_camera(model, rollout.qpos, np.unique(track, axis=0), width, height)
     return render_mp4(model, traj, out, fps=fps, width=width, height=height,
-                      camera=cam, mocap_pos=np.asarray(rollout.flag_pos)[None, :])
+                      camera=cam, mocap_track=track[:, None, :])

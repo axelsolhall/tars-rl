@@ -7,7 +7,8 @@ policy and value networks built from the profile's network description or `--net
 Writes one policy folder (A60, layout in `tars_rl.train.policy`):
   progress.jsonl  learning curve (A61): a "ppo" line per brax eval (reward, episode metrics) and
                   a "curve" line with our own flag eval on fixed held-out flags (success rate,
-                  fall rate, distance left), so the curve says whether TARS gets to the flag
+                  flags tagged per episode, time to first tag, fall rate, distance left), so
+                  the curve says whether TARS gets to the flag
   policy.pkl, meta.json, rollout.npz (episode 0 of the trained policy, for T9's MP4)
 """
 
@@ -56,8 +57,12 @@ def make_curve_eval(env: FlagEnv, make_inference_fn, n: int, rng: jax.Array):
             return _freeze(s.done, s, new), None
 
         s, _ = jax.lax.scan(body, s0, jax.random.split(k_pol, env.config.max_steps))
+        tagged = s.first_tag >= 0
         return {
-            "success_rate": s.success.mean(),
+            "success_rate": (s.tags > 0).mean(),
+            "tags_per_ep": s.tags.mean(),
+            # mean over the episodes that tagged a flag; nan when none did
+            "first_tag_s": (s.first_tag * tagged).sum() / tagged.sum() * env.dt,
             "fall_rate": s.fell.mean(),
             "final_dist_m": s.dist.mean(),
             "closed_frac": ((s.start_dist - s.dist) / s.start_dist).mean(),
@@ -112,6 +117,7 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
         c = curve_eval(params)
         write({"kind": "curve", "step": int(step), "wall_s": time.perf_counter() - t0, **c})
         log(f"step {int(step):>12,}  success {c['success_rate']:.1%}  "
+            f"tags/ep {c['tags_per_ep']:.2f}  "
             f"dist left {c['final_dist_m']:.2f} m  falls {c['fall_rate']:.1%}")
 
     _, params, _ = ppo.train(
@@ -150,7 +156,8 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
     save_policy(out, params, meta)
 
     r = run_episodes(env, as_policy(inference, params), jax.random.PRNGKey(seed), 1)
-    FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0]).save(out / ROLLOUT_FILE)
+    FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0],
+                r["flag_track_ep0"]).save(out / ROLLOUT_FILE)
     log(f"saved policy, curve and rollout to {out} ({wall:.0f} s training)")
     return meta
 

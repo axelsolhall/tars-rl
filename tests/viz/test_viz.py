@@ -163,6 +163,24 @@ def test_render_flag_mp4_shows_flag_and_body(flag_model, tmp_path, flag_xy):
     assert abs(_red_col(frames[0]) - _red_col(g0)) > 5
 
 
+def test_render_flag_mp4_moves_flag_along_track(flag_model, tmp_path):
+    """Chain mode (T26): the flag jumps mid-clip, and the camera frames both spots."""
+    t = scripted_sine(flag_model, body_spec_version=1, seconds=1.0)
+    track = np.zeros((t.n_frames, 3))
+    track[: t.n_frames // 2] = [1.5, 0.0, 0.0]
+    track[t.n_frames // 2 :] = [-1.0, 1.2, 0.0]  # tagged halfway: new flag
+    r = FlagRollout(t.qpos, t.dt, 1, track[0], track)
+    out = tmp_path / "c.mp4"
+    s = render_flag_mp4(flag_model, r, out, fps=20, width=320, height=240)
+    assert s.frames == s.expected_frames == 20
+    with imageio.get_reader(out) as rd:
+        frames = [f for f in rd]
+    assert _red(frames[0]) > 5 and _red(frames[-1]) > 5  # both flags in view
+    assert abs(_red_col(frames[0]) - _red_col(frames[-1])) > 5  # the flag moved
+    np.testing.assert_allclose(flag_distances(flag_model, t.qpos, track)[-1],
+                               np.hypot(*(central_xy(flag_model, t.qpos)[-1] - [-1.0, 1.2])))
+
+
 def test_render_flag_rejects_model_without_flag(model, tmp_path):
     t = scripted_sine(model, body_spec_version=1, seconds=0.2)
     r = FlagRollout(t.qpos, t.dt, 1, np.zeros(3))

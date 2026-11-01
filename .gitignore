@@ -221,3 +221,6 @@ __marimo__/
 
 # tars-rl: training runs, policies, rollouts (large; reproduce with tars_rl.train.run)
 runs/
+
+# macOS Finder metadata
+.DS_Store

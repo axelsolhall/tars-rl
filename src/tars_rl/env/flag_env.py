@@ -14,7 +14,11 @@ order; `channel_slices()` gives each one's span. The default set (A19, A44), 9 +
   [6+2n:9+2n]    central body angular velocity in its own frame (rad/s)
 The mark2 set (T24) swaps the last two for three IMUs and adds ten touch bits and the last action.
 
-Episode ends on success (A23), fall (A24) or timeout (config.episode_seconds).
+Flags (T26, `config.flags`): in "chain" mode (default) tagging a flag (centre within the success
+radius, A23) moves it to a new spot drawn by the same rules around TARS's current position and the
+episode goes on; it ends only on a fall (A24) or timeout (config.episode_seconds). The tag step's
+progress is measured against the old flag; from the next step on, against the new one. In "single"
+mode (the benchmark) tagging ends the episode as a success.
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from tars_rl.env.sensors import (
 )
 
 CENTRAL_BODY = "central"
+METRIC_KEYS = ("progress", "upright", "fall", "effort", "tag")
 ROOT_JOINT = "root"
 
 
@@ -49,16 +54,19 @@ class State(NamedTuple):
     data: mjx.Data
     obs: jax.Array
     reward: jax.Array
-    done: jax.Array  # success | fell | truncated
-    success: jax.Array
+    done: jax.Array  # single: success | fell | truncated; chain: fell | truncated
+    success: jax.Array  # a flag was tagged this step
     fell: jax.Array
-    truncated: jax.Array  # timeout without success or fall
-    flag_pos: jax.Array  # (3,) world frame, on the floor
-    dist: jax.Array  # xy distance from the central body's centre to the flag (m)
-    start_dist: jax.Array
+    truncated: jax.Array  # timeout without fall (single: and without success)
+    flag_pos: jax.Array  # (3,) world frame, on the floor; the current flag
+    dist: jax.Array  # xy distance from the central body's centre to the current flag (m)
+    start_dist: jax.Array  # dist when the current flag appeared
     step: jax.Array  # policy steps taken
     metrics: dict[str, jax.Array]  # the reward's terms this step, already weighted
+    tags: jax.Array  # flags tagged this episode (int32)
+    first_tag: jax.Array  # step of the first tag, -1 before it (int32)
     rng: jax.Array | None = None  # sensor noise key; None (e.g. the training adapter) = no noise
+    flag_rng: jax.Array | None = None  # draws the next flag in chain mode
 
 
 class FlagEnv:
@@ -157,8 +165,9 @@ class FlagEnv:
     def action_to_ctrl(self, action: jax.Array) -> jax.Array:
         return self._ctrl_mid + self._ctrl_half * jnp.clip(action, -1.0, 1.0)
 
-    def sample_flag(self, rng: jax.Array) -> jax.Array:
-        """Uniform direction, uniform distance in [min, max] body heights from the start (A22)."""
+    def sample_flag(self, rng: jax.Array, centre_xy: jax.Array | None = None) -> jax.Array:
+        """Uniform direction, uniform distance in [min, max] body heights (A22) from `centre_xy`,
+        default the start position."""
         c = self.config
         k_ang, k_dist = jax.random.split(rng)
         ang = jax.random.uniform(k_ang, (), minval=0.0, maxval=2 * jnp.pi)
@@ -166,7 +175,8 @@ class FlagEnv:
             k_dist, (), minval=c.flag_min_heights * self.height,
             maxval=c.flag_max_heights * self.height,
         )
-        xy = jnp.asarray(self.start_xy) + r * jnp.array([jnp.cos(ang), jnp.sin(ang)])
+        centre = jnp.asarray(self.start_xy if centre_xy is None else centre_xy)
+        xy = centre + r * jnp.array([jnp.cos(ang), jnp.sin(ang)])
         return jnp.array([xy[0], xy[1], 0.0])
 
     def _dist(self, data: mjx.Data, flag_pos: jax.Array) -> jax.Array:
@@ -225,11 +235,14 @@ class FlagEnv:
         no = jnp.zeros((), dtype=bool)
         # fold_in, not split: the flag drawn from rng stays the benchmark's.
         k_noise, k_obs = jax.random.split(jax.random.fold_in(rng, 1))
+        k_flag = jax.random.fold_in(rng, 2)
+        none = jnp.zeros((), dtype=jnp.int32)
         return State(
             data=data, obs=self.observe(data, flag_pos, k_obs), reward=zero, done=no,
             success=no, fell=no, truncated=no, flag_pos=flag_pos, dist=dist, start_dist=dist,
             step=jnp.zeros((), dtype=jnp.int32),
-            metrics={k: zero for k in ("progress", "upright", "fall", "effort")}, rng=k_noise,
+            metrics={k: zero for k in METRIC_KEYS}, tags=none, first_tag=none - 1,
+            rng=k_noise, flag_rng=k_flag,
         )
 
     def step(self, state: State, action: jax.Array) -> State:
@@ -243,20 +256,40 @@ class FlagEnv:
         dist = self._dist(data, state.flag_pos)
         cos_tilt = self._cos_tilt(data)
         fell = cos_tilt < jnp.cos(c.fall_tilt_rad)
-        success = (dist < c.success_heights * self.height) & ~fell
+        success = (dist < c.success_heights * self.height) & ~fell  # tagged the current flag
         step = state.step + 1
-        truncated = (step >= c.max_steps) & ~fell & ~success
+        flag_pos, flag_rng, start_dist, next_dist = (
+            state.flag_pos, state.flag_rng, state.start_dist, dist)
+        if c.flags == "chain":
+            if flag_rng is None:
+                raise ValueError("chain mode needs State.flag_rng to draw the next flag")
+            flag_rng, k_flag = jax.random.split(flag_rng)
+            new_flag = self.sample_flag(k_flag, data.xpos[self._central][:2])
+            flag_pos = jnp.where(success, new_flag, state.flag_pos)
+            data = data.replace(mocap_pos=data.mocap_pos.at[self._mocap].set(flag_pos))
+            next_dist = jnp.where(success, self._dist(data, flag_pos), dist)
+            start_dist = jnp.where(success, next_dist, state.start_dist)
+            truncated = (step >= c.max_steps) & ~fell
+            done = fell | truncated
+        else:
+            truncated = (step >= c.max_steps) & ~fell & ~success
+            done = fell | success | truncated
         metrics = {
+            # against the flag TARS was walking to, so a respawn never jumps the reward
             "progress": w.progress * (state.dist - dist),
             "upright": w.upright * cos_tilt,
             "fall": -w.fall * fell.astype(jnp.float32),
             "effort": -w.effort * jnp.mean(jnp.square(jnp.clip(action, -1.0, 1.0))),
+            "tag": w.tag * success.astype(jnp.float32),
         }
         rng, k_obs = jax.random.split(state.rng) if state.rng is not None else (None, None)
         sensed = state.data if c.sensor_delay_steps else data
         return State(
-            data=data, obs=self.observe(data, state.flag_pos, k_obs, sensed),
-            reward=sum(metrics.values()), done=fell | success | truncated, success=success,
-            fell=fell, truncated=truncated, flag_pos=state.flag_pos, dist=dist,
-            start_dist=state.start_dist, step=step, metrics=metrics, rng=rng,
+            data=data, obs=self.observe(data, flag_pos, k_obs, sensed),
+            reward=sum(metrics.values()), done=done, success=success,
+            fell=fell, truncated=truncated, flag_pos=flag_pos, dist=next_dist,
+            start_dist=start_dist, step=step, metrics=metrics,
+            tags=state.tags + success.astype(jnp.int32),
+            first_tag=jnp.where(success & (state.first_tag < 0), step, state.first_tag),
+            rng=rng, flag_rng=flag_rng,
         )

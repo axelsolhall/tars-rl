@@ -3,9 +3,12 @@
 Runs a batch of episodes in MJX for two reference policies on the same flags:
   random  uniform actions in [-1, 1] every step
   zero    every actuator held at its centred target
-and prints success, fall and timeout rates, start and final flag distance, distance closed,
-episode length and return. These are the floor a trained policy (T14) must beat. Also saves
-episode 0 of the random policy as a flag rollout (.npz, A51) for the MP4 / Unreal players.
+and prints success, fall and timeout rates, flags tagged per episode and time to first tag, start
+and final flag distance, distance closed, episode length and return. `--flags single|chain`
+picks the flag mode (T26): in chain mode success = at least one flag tagged, and the distances
+are to the flag standing at the end (start = when it appeared). These are the floor a trained
+policy (T14) must beat. Also saves episode 0 of the random policy as a flag rollout (.npz, A51,
+with the per-frame flag track) for the MP4 / Unreal players.
 
 `--obs mark2` runs the same baselines with the Mark 2 senses and then the senses check
 (`env.sense_check`): every channel's name, units and range, and the tipped-over touch and
@@ -25,7 +28,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from tars_rl.env.config import EnvConfig
+from tars_rl.env.config import FLAG_MODES, EnvConfig
 from tars_rl.env.flag_env import FlagEnv, State
 from tars_rl.env.rollout import FlagRollout
 from tars_rl.env.sense_check import report_senses, sense_check
@@ -64,31 +67,38 @@ def run_episodes(env: FlagEnv, policy: Policy, rng: jax.Array, n: int) -> dict[s
             new = jax.vmap(env.step)(s, policy(k, s.obs))
             ret = ret + jnp.where(s.done, 0.0, new.reward)
             new = _freeze(s.done, s, new)
-            return (new, ret), new.data.qpos[0]
+            return (new, ret), (new.data.qpos[0], new.flag_pos[0])
 
         keys = jax.random.split(k_pol, env.config.max_steps)
-        (s, ret), q0 = jax.lax.scan(body, (s0, jnp.zeros(n)), keys)
-        return s, ret, jnp.concatenate([s0.data.qpos[:1], q0])
+        (s, ret), (q0, f0) = jax.lax.scan(body, (s0, jnp.zeros(n)), keys)
+        return (s, ret, jnp.concatenate([s0.data.qpos[:1], q0]),
+                jnp.concatenate([s0.flag_pos[:1], f0]), s0.flag_pos)
 
     s: State
-    s, ret, q0 = go(k_reset, k_pol)
+    s, ret, q0, f0, first_flag = go(k_reset, k_pol)
     out = {
-        "success": s.success, "fell": s.fell, "truncated": s.truncated, "done": s.done,
+        "success": s.tags > 0, "fell": s.fell, "truncated": s.truncated, "done": s.done,
         "start_dist": s.start_dist, "final_dist": s.dist, "length": s.step, "return": ret,
-        "flag_pos": s.flag_pos,
+        "flag_pos": first_flag, "tags": s.tags, "first_tag": s.first_tag,
     }
     out = {k: np.asarray(v) for k, v in out.items()}
     out["qpos_ep0"] = np.asarray(q0)[: int(out["length"][0]) + 1]
+    out["flag_track_ep0"] = np.asarray(f0)[: int(out["length"][0]) + 1]
     return out
 
 
 def summarize(r: dict[str, np.ndarray], env: FlagEnv) -> dict[str, float]:
     h = env.height
+    tagged = r["first_tag"] >= 0
     return {
         "episodes": int(len(r["success"])),
         "success_rate": float(r["success"].mean()),
         "fall_rate": float(r["fell"].mean()),
         "timeout_rate": float(r["truncated"].mean()),
+        "tags_per_ep": float(r["tags"].mean()),
+        # mean over the episodes that tagged a flag; nan when none did
+        "first_tag_s": float(r["first_tag"][tagged].mean() * env.dt) if tagged.any()
+        else float("nan"),
         "start_dist_m": float(r["start_dist"].mean()),
         "final_dist_m": float(r["final_dist"].mean()),
         "final_dist_heights": float(r["final_dist"].mean() / h),
@@ -107,7 +117,7 @@ def run(episodes: int, seed: int, config: EnvConfig | None = None,
     res: dict = {
         "spec": env.spec.name, "body_spec_version": env.spec.version, "seed": seed,
         "body_height_m": env.height, "max_steps": env.config.max_steps, "ctrl_dt": env.dt,
-        "config": env.config.to_dict(), "obs_set": env.config.obs,
+        "config": env.config.to_dict(), "obs_set": env.config.obs, "flags": env.config.flags,
         "observation_size": env.observation_size, "policies": {},
     }
     raw = {}
@@ -119,7 +129,8 @@ def run(episodes: int, seed: int, config: EnvConfig | None = None,
         res["policies"][name] = s
     if rollout_path:
         r = raw["random"]
-        FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0]).save(rollout_path)
+        FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0],
+                    r["flag_track_ep0"]).save(rollout_path)
         res["rollout"] = str(rollout_path)
     if any(c.needs_mark2 for c in env.channels):
         res["senses"] = sense_check(env, seed)
@@ -130,12 +141,15 @@ def report(res: dict) -> None:
     print(f"Flag arena baseline: {res['spec']} v{res['body_spec_version']}, "
           f"body height {res['body_height_m']:.2f} m, seed {res['seed']}, "
           f"{res['max_steps']} steps x {res['ctrl_dt']} s max, "
-          f"observation '{res['obs_set']}' ({res['observation_size']} floats)\n")
+          f"observation '{res.get('obs_set', 'default')}' "
+          f"({res.get('observation_size', '?')} floats), flags '{res.get('flags', 'single')}'\n")
     rows = [
         ("episodes", "episodes", "{:.0f}"),
         ("success rate", "success_rate", "{:.1%}"),
         ("fall rate", "fall_rate", "{:.1%}"),
         ("timeout rate", "timeout_rate", "{:.1%}"),
+        ("flags tagged / episode", "tags_per_ep", "{:.2f}"),
+        ("first tag (s)", "first_tag_s", "{:.2f}"),
         ("start dist (m)", "start_dist_m", "{:.3f}"),
         ("final dist (m)", "final_dist_m", "{:.3f}"),
         ("final dist (heights)", "final_dist_heights", "{:.2f}"),
@@ -164,11 +178,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seconds", type=float, help="episode length (default: EnvConfig)")
     p.add_argument("--obs", default="default", choices=sorted(OBS_SETS),
                    help="observation set (mark2 also runs the senses check)")
+    p.add_argument("--flags", default="chain", choices=FLAG_MODES,
+                   help="chain: a tagged flag respawns; single: tagging ends the episode")
     p.add_argument("--rollout", default="runs/env/random_ep0.npz",
                    help="where to save the sample rollout ('' to skip)")
     p.add_argument("--json", help="also write the results to this JSON file")
     a = p.parse_args(argv)
-    cfg = EnvConfig(obs=a.obs, **({"episode_seconds": a.seconds} if a.seconds else {}))
+    secs = {"episode_seconds": a.seconds} if a.seconds else {}
+    cfg = EnvConfig(obs=a.obs, flags=a.flags, **secs)
     res = run(a.episodes, a.seed, cfg, a.rollout or None)
     report(res)
     if a.json:

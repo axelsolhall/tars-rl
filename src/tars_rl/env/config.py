@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 
+FLAG_MODES = ("chain", "single")
+
 
 @dataclass(frozen=True)
 class RewardConfig:
@@ -14,6 +16,7 @@ class RewardConfig:
     upright: float = 0.02  # times cos(tilt) of the central body, every step
     fall: float = 1.0  # once, on the step the episode ends as a fall
     effort: float = 0.005  # times mean(action**2), action in [-1, 1]
+    tag: float = 0.0  # once per flag tagged; 0: the next flag's progress is the incentive (T26)
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,9 @@ class EnvConfig:
     flag_min_heights: float = 3.0  # A22
     flag_max_heights: float = 10.0  # A22
     success_heights: float = 1.0  # A23: centre within this many heights of the flag (xy)
+    # T26: "chain" = a tagged flag respawns 3-10 heights around TARS and the episode goes on
+    # (ends on a fall or timeout); "single" = the benchmark's one flag, tagging ends the episode.
+    flags: str = "chain"
     fall_tilt_rad: float = math.radians(60.0)  # A24
     reward: RewardConfig = field(default_factory=RewardConfig)
     # Senses (T24): which observation set, see `sensors.OBS_SETS`.
@@ -34,6 +40,10 @@ class EnvConfig:
     # (flip probability for the binary touch channel), and 0 or 1 policy step of sensor delay.
     sensor_noise: dict[str, float] = field(default_factory=dict)
     sensor_delay_steps: int = 0
+
+    def __post_init__(self) -> None:
+        if self.flags not in FLAG_MODES:
+            raise ValueError(f"flags must be one of {FLAG_MODES}, got {self.flags!r}")
 
     @property
     def max_steps(self) -> int:

@@ -69,10 +69,13 @@ def flag_sample(seed: int, path: Path) -> Path:
 
     env = FlagEnv()
     r = run_episodes(env, random_policy(env.action_size), jax.random.PRNGKey(seed), 1)
-    return FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0]).save(path)
+    return FlagRollout(r["qpos_ep0"], env.dt, env.spec.version, r["flag_pos"][0],
+                       r["flag_track_ep0"]).save(path)
 
 
 def flag_main(a: argparse.Namespace) -> int:
+    import numpy as np
+
     from tars_rl.env.rollout import FlagRollout
     from tars_rl.viz.flag import arena_model, flag_distances, render_flag_mp4
 
@@ -83,7 +86,9 @@ def flag_main(a: argparse.Namespace) -> int:
         raise SystemExit(f"Rollout BodySpec v{rollout.body_spec_version} != v{spec_version}")
 
     s = render_flag_mp4(model, rollout, a.out, fps=a.fps, width=a.width, height=a.height)
-    d = flag_distances(model, rollout.qpos, rollout.flag_pos)
+    track = rollout.flag_track if rollout.flag_track is not None else rollout.flag_pos
+    d = flag_distances(model, rollout.qpos, track)
+    n_flags = 1 if rollout.flag_track is None else len(np.unique(rollout.flag_track, axis=0))
     ok = s.frames == s.expected_frames
     fx, fy = rollout.flag_pos[:2]
     src = "given" if a.rollout else f"random policy, seed {a.seed}"
@@ -92,8 +97,8 @@ def flag_main(a: argparse.Namespace) -> int:
           f"MUJOCO_GL={os.environ.get('MUJOCO_GL', 'default')}")
     print(f"rollout         {path}  ({src})  {len(rollout.qpos)} frames x {rollout.dt:g} s = "
           f"{s.sim_seconds:.2f} s sim (BodySpec v{rollout.body_spec_version})")
-    print(f"flag            x {fx:+.3f} m, y {fy:+.3f} m")
-    print(f"flag distance   start {d[0]:.3f} m -> end {d[-1]:.3f} m "
+    print(f"flag            x {fx:+.3f} m, y {fy:+.3f} m (first), {n_flags} flag(s) shown")
+    print(f"flag distance   start {d[0]:.3f} m -> end {d[-1]:.3f} m (to the current flag) "
           f"({trend} by {abs(d[0] - d[-1]):.3f} m)")
     print(f"video           {a.out}  {a.width}x{a.height} @ {s.fps} fps")
     print(f"frames          {s.frames} (expected {s.expected_frames}) {'OK' if ok else 'MISMATCH'}")
