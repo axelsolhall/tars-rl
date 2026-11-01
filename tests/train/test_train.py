@@ -13,11 +13,11 @@ from brax.training.acme import running_statistics, specs
 from tars_rl.env.flag_env import FlagEnv
 from tars_rl.train.adapter import METRICS, PlaygroundFlagEnv
 from tars_rl.train.config import PROFILES, get_profile
+from tars_rl.train.networks import network_factory
 from tars_rl.train.policy import (
     PROGRESS_FILE,
     load_policy,
     make_inference,
-    network_factory,
     read_progress,
     save_policy,
 )
@@ -80,9 +80,7 @@ def test_adapter_progress_uses_distance_from_data(env):
 
 def test_policy_folder_roundtrip(env, tmp_path):
     cfg = get_profile("smoke")
-    nets = network_factory(cfg.policy_hidden, cfg.value_hidden)(
-        env.observation_size, env.action_size
-    )
+    nets = network_factory(cfg.network)(env.observation_size, env.action_size)
     norm = running_statistics.init_state(specs.Array((env.observation_size,), jnp.float32))
     params = (norm, nets.policy_network.init(jax.random.PRNGKey(0)))
     meta = {
@@ -95,8 +93,7 @@ def test_policy_folder_roundtrip(env, tmp_path):
     obs = jax.random.normal(jax.random.PRNGKey(1), (3, env.observation_size))
     a = saved.policy()(jax.random.PRNGKey(0), obs)
     assert a.shape == (3, env.action_size)
-    inf = make_inference(env.observation_size, env.action_size, cfg.policy_hidden,
-                         cfg.value_hidden)
+    inf = make_inference(env.observation_size, env.action_size, cfg.network)
     want = inf(params, deterministic=True)(obs, jax.random.PRNGKey(0))[0]
     np.testing.assert_allclose(a, want, atol=1e-6)
 

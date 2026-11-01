@@ -131,3 +131,24 @@ render ≈ 0.3–0.9 s per sim s.
   (≈ 3.5 body heights at the start; the body is 0.36 m tall).
 - [ ] The `flag distance` line matches the video: start → end, TARS ends `closer` or `farther`.
 - [ ] Eval prints `frames N (expected N) OK`.
+
+## T18 Network builder (`tars_rl.train.networks`)
+
+1. **Eval.** `uv run python -m tars_rl.train.eval_networks --profile smoke --seed 0` (~5 min on the
+   Mac): trains the default and four other shapes (mlp+layernorm, SimBa, BroNet, SimBa-RMS-GELU)
+   with the same smoke settings and prints parameter counts, training time, steps/s and held-out
+   score next to random and stand-still. Smoke scores only prove each shape trains; ranking shapes
+   is T19's job. Exits 1 if a policy folder recorded a different description than it trained.
+2. **Default = T15.** Verified 2026-11-01: a smoke run (seed 0) before and after T18 gives a
+   byte-identical `policy.pkl` and identical learning-curve numbers; `test_default_matches_brax_exactly`
+   checks the param tree and init values against brax for both profiles. The eval's default row
+   (0 % success, 81.2 % falls, closed −1.3 %) equals T15's smoke measurement above.
+   Measured 2026-11-01 (~6 min): every shape trains; all smoke scores sit at the random/still floor,
+   as expected from 2,560 steps.
+3. **Description recorded.** Each policy folder's `meta.json` has `network` (fields) and
+   `network_str` (short form, e.g. `policy=simba-2x32-relu-layer-e4 value=...`). Folders from T15
+   (version 1) still load as the plain MLP they were.
+4. **Your call:** are SimBa and BroNet (with the layer/RMS norm and activation options) the right
+   SotA block set to start T19's search from, or should another block (e.g. SimbaV2's hyperspherical
+   normalisation) be added first?
+5. **Checks.** `uv run ruff check src/tars_rl/train tests/train` and `uv run pytest tests/train`.

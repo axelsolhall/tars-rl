@@ -98,3 +98,14 @@ episode draws a new flag as A22 says; the default would replay each env's first 
 | A10 | A rollout is a versioned Trajectory .npz: per-frame qpos, timestep, BodySpec version. | confirmed | A8 | `viz.trajectory` | `test_trajectory_roundtrip` | change `Trajectory` and its loaders |
 | A46 | Quick-check MP4s use MuJoCo's offscreen renderer and imageio-ffmpeg. | confirmed | A1 | `viz.render` | `viz.eval` frame count OK | swap `render_mp4` |
 | A93 | Flag-arena videos use one fixed camera per clip that frames TARS's whole path and the flag, instead of following TARS. | proposed | A46, A51 | `viz.flag.framing_camera` | `test_render_flag_mp4_shows_flag_and_body`; watch `--flag-sample` | change `framing_camera` or pass another camera to `render_mp4` |
+
+## Network builder (`tars_rl.train.networks`, T18)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A77 | Building blocks: plain layers (optionally normalised) plus SotA residual normalised blocks (SimBa, BroNet), configurable so the tuner can evolve the shape. | confirmed | | `networks.Tower`, `NetSpec` | `train.eval_networks`; T19 trials (signpost: residual blocks never win or destabilise training) | add a block kind in `Tower` + `BLOCKS` |
+| A91 | Every tower uses brax's lecun_uniform init and ends in a plain Dense head, whatever its block. | proposed | A77 | `networks.KERNEL_INIT`, `Tower` | T19: residual blocks with lecun_uniform vs orthogonal init | add an `init` field to `NetSpec` |
+| A92 | Policy and value each get their own description, so the tuner shapes them separately. | proposed | A77 | `NetworkSpec` | T19: do the best policy and value shapes differ? | tie them in T19's search space |
+
+The default description (`mlp`, swish, no norm, the profile's sizes) is brax's own MLP: same
+parameter names and init, so a smoke run with seed 0 gives a byte-identical `policy.pkl` to T15's.

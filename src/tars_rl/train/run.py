@@ -2,7 +2,8 @@
 
 Run: python -m tars_rl.train.run --profile smoke --seed 0 --out runs/smoke
 
-MuJoCo Playground's PPO (brax) on the T13 flag arena (A58), settings from a profile (A59).
+MuJoCo Playground's PPO (brax) on the T13 flag arena (A58), settings from a profile (A59), the
+policy and value networks built from the profile's network description or `--network` (T18).
 Writes one policy folder (A60, layout in `tars_rl.train.policy`):
   progress.jsonl  learning curve (A61): a "ppo" line per brax eval (reward, episode metrics) and
                   a "curve" line with our own flag eval on fixed held-out flags (success rate,
@@ -31,14 +32,8 @@ from tars_rl.env.flag_env import FlagEnv
 from tars_rl.env.rollout import FlagRollout
 from tars_rl.train.adapter import PlaygroundFlagEnv
 from tars_rl.train.config import PPOConfig, get_profile
-from tars_rl.train.policy import (
-    PROGRESS_FILE,
-    ROLLOUT_FILE,
-    as_policy,
-    make_inference,
-    network_factory,
-    save_policy,
-)
+from tars_rl.train.networks import network_factory
+from tars_rl.train.policy import PROGRESS_FILE, ROLLOUT_FILE, as_policy, make_inference, save_policy
 
 CURVE_SEED_OFFSET = 1_000  # curve flags come from seed + this, never the training seed's draws
 
@@ -97,8 +92,9 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
 
     env = FlagEnv(config=env_config)
     penv = PlaygroundFlagEnv(env)
-    inference = make_inference(env.observation_size, env.action_size, cfg.policy_hidden,
-                               cfg.value_hidden, cfg.normalize_observations)
+    inference = make_inference(env.observation_size, env.action_size, cfg.network,
+                               cfg.normalize_observations)
+    log(f"network {cfg.network}")
     curve_eval = make_curve_eval(env, inference, cfg.curve_episodes,
                                  jax.random.PRNGKey(seed + CURVE_SEED_OFFSET))
     t0 = time.perf_counter()
@@ -137,7 +133,7 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
         max_grad_norm=cfg.max_grad_norm,
         normalize_observations=cfg.normalize_observations,
         action_repeat=cfg.action_repeat,
-        network_factory=network_factory(cfg.policy_hidden, cfg.value_hidden),
+        network_factory=network_factory(cfg.network),
         seed=seed,
         progress_fn=progress_fn,
         policy_params_fn=policy_params_fn,
@@ -165,8 +161,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", required=True)
     p.add_argument("--timesteps", type=int, help="override the profile's num_timesteps")
+    p.add_argument("--network", help="network description (tars_rl.train.networks), e.g. "
+                   "'policy=simba-2x128-relu-layer-e4 value=bro-2x256-relu-layer'; "
+                   "default: the profile's")
     a = p.parse_args(argv)
     over = {"num_timesteps": a.timesteps} if a.timesteps else {}
+    if a.network:
+        over["network"] = a.network
     train(a.profile, a.seed, a.out, get_profile(a.profile, **over))
     return 0
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 
+from tars_rl.train.networks import NetSpec, NetworkSpec
+
 
 @dataclass(frozen=True)
 class PPOConfig:
@@ -28,8 +30,7 @@ class PPOConfig:
     max_grad_norm: float = 1.0
     normalize_observations: bool = True
     action_repeat: int = 1
-    policy_hidden: tuple[int, ...] = (128, 128, 128, 128)
-    value_hidden: tuple[int, ...] = (256, 256, 256, 256, 256)
+    network: NetworkSpec = NetworkSpec()  # policy mlp-4x128-swish, value mlp-5x256-swish (T18)
     curve_episodes: int = 128  # own flag eval at every learning-curve point (A61)
 
     def check(self) -> PPOConfig:
@@ -37,6 +38,7 @@ class PPOConfig:
         if (self.batch_size * self.num_minibatches) % self.num_envs:
             raise ValueError("batch_size * num_minibatches must be a multiple of num_envs")
         per_step = self.batch_size * self.unroll_length * self.num_minibatches * self.action_repeat
+        self.network.check()
         if self.num_timesteps < per_step:
             raise ValueError(f"num_timesteps {self.num_timesteps} < one training step {per_step}")
         return self
@@ -67,14 +69,15 @@ PROFILES: dict[str, PPOConfig] = {
         num_minibatches=4,
         unroll_length=10,
         num_updates_per_batch=2,
-        policy_hidden=(32, 32),
-        value_hidden=(32, 32),
+        network=NetworkSpec(NetSpec(depth=2, width=32), NetSpec(depth=2, width=32)),
         curve_episodes=16,
     ),
 }
 
 
 def get_profile(name: str, **overrides) -> PPOConfig:
+    if isinstance(overrides.get("network"), str):
+        overrides["network"] = NetworkSpec.parse(overrides["network"])
     if name not in PROFILES:
         raise KeyError(f"unknown profile {name!r}; known: {sorted(PROFILES)}")
     return replace(PROFILES[name], **overrides).check()

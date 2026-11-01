@@ -27,7 +27,7 @@ from tars_rl.train.policy import load_policy, read_progress
 EVAL_SEED_OFFSET = 2_000  # eval flags differ from training and learning-curve flags
 
 
-def evaluate(policy_dir: str | Path, episodes: int, seed: int) -> dict:
+def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool = True) -> dict:
     saved = load_policy(policy_dir)
     m = saved.meta
     env = FlagEnv(config=EnvConfig(**{**m["env"], "reward": RewardConfig(**m["env"]["reward"])}))
@@ -40,14 +40,17 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int) -> dict:
         "body_height_m": env.height, "max_steps": env.config.max_steps, "ctrl_dt": env.dt,
         "policy": str(policy_dir), "profile": m["profile"], "policies": {},
     }
-    for name, pol in (("trained", saved.policy()), ("random", random_policy(env.action_size)),
-                      ("still", zero_policy(env.action_size))):
+    runs = [("trained", saved.policy())]
+    if baselines:
+        n = env.action_size
+        runs += [("random", random_policy(n)), ("still", zero_policy(n))]
+    for name, pol in runs:
         t0 = time.perf_counter()
         s = summarize(run_episodes(env, pol, rng, episodes), env)
         s["wall_s"] = time.perf_counter() - t0
         res["policies"][name] = s
     p = res["policies"]
-    res["beats_baselines"] = all(
+    res["beats_baselines"] = baselines and all(
         p["trained"]["success_rate"] > p[b]["success_rate"]
         and p["trained"]["final_dist_m"] < p[b]["final_dist_m"]
         for b in ("random", "still")
