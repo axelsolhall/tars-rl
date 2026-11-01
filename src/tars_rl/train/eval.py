@@ -42,8 +42,9 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool =
     res: dict = {
         "spec": env.spec.name, "body_spec_version": env.spec.version, "seed": seed,
         "body_height_m": env.height, "max_steps": env.config.max_steps, "ctrl_dt": env.dt,
-        "policy": str(policy_dir), "profile": m["profile"], "obs_set": env.config.obs,
-        "observation_size": env.observation_size, "flags": env.config.flags, "policies": {},
+        "policy": str(policy_dir), "profile": m["profile"], "algo": saved.algo,
+        "obs_set": env.config.obs, "observation_size": env.observation_size,
+        "flags": env.config.flags, "policies": {},
     }
     runs = [("trained", saved.policy())]
     if baselines:
@@ -65,7 +66,7 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool =
 
 
 def report_all(res: dict) -> None:
-    print(f"Policy {res['policy']} (profile {res['profile']})")
+    print(f"Policy {res['policy']} ({res.get('algo', 'ppo')}, profile {res['profile']})")
     report(res)
     print(f"\nTrained beats random and still (success up, distance down): "
           f"{'YES' if res['beats_baselines'] else 'NO'}")

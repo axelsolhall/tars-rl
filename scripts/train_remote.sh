@@ -9,6 +9,9 @@
 #   TARS_HOST=user@host scripts/train_remote.sh status [name]         # tail the run's log
 #   TARS_HOST=user@host scripts/train_remote.sh fetch  [name]         # copy runs/<name> back here
 #
+# TARS_ALGO=fasttd3|fastsac (default ppo) starts an off-policy run (T21) instead, named
+# full-<algo>-seed<seed>, with the wall-clock budget of the PPO run in TARS_MATCH_WALL
+# (default runs/full-seed0 on the box).
 # TARS_HOST is never stored in the repo. TARS_REMOTE_DIR (default ~/tars-rl) is where the code
 # lives on the box. The run refuses to start if the GPU has less than TARS_MIN_FREE_MIB free
 # (default 12000): stop whatever else holds the GPU first.
@@ -18,14 +21,21 @@ cmd=${1:-}
 host=${TARS_HOST:?set TARS_HOST=user@host}
 dir=${TARS_REMOTE_DIR:-tars-rl}
 min_free=${TARS_MIN_FREE_MIB:-12000}
+algo=${TARS_ALGO:-ppo}
+match=${TARS_MATCH_WALL:-runs/full-seed0}
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 case "$cmd" in
   start|tune|compare)
-    if [ "$cmd" = start ]; then
+    if [ "$cmd" = start ] && [ "$algo" = ppo ]; then
       seed=${2:-0}
       name=${3:-full-seed$seed}
       run=(tars_rl.train.run --profile full --seed "$seed" --out "runs/$name")
+    elif [ "$cmd" = start ]; then  # off-policy, on PPO's wall-clock budget (T21)
+      seed=${2:-0}
+      name=${3:-full-$algo-seed$seed}
+      run=(tars_rl.train.offpolicy --algo "$algo" --match-wall "$match"
+           --profile full --seed "$seed" --out "runs/$name")
     elif [ "$cmd" = tune ]; then  # the same command again resumes a stopped campaign (T19)
       trials=${2:-48}
       name=${3:-tune-full}
@@ -43,6 +53,7 @@ set -euo pipefail
 dir=$1 name=$2 min_free=$3
 shift 3
 export PATH="$HOME/.local/bin:$PATH"
+export PYTHONUNBUFFERED=1  # train.log shows progress live under nohup
 free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1)
 if [ "$free" -lt "$min_free" ]; then
   echo "GPU has ${free} MiB free (< ${min_free}); free it and retry." >&2
@@ -74,7 +85,7 @@ EOF
     echo "  or a comparison: uv run python -m tars_rl.tune.eval_compare --compare runs/$name"
     ;;
   *)
-    sed -n '2,14p' "$0"
+    sed -n '2,17p' "$0"
     exit 2
     ;;
 esac

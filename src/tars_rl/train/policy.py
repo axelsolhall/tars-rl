@@ -3,7 +3,9 @@
     <out>/policy.pkl     brax params (normalizer, policy) as numpy arrays
     <out>/meta.json      version, profile + PPO settings, the network description it was built
                          from ("network" as fields, "network_str" in short form, T18), EnvConfig,
-                         BodySpec name/version, obs/action sizes, seed, steps trained, wall time
+                         BodySpec name/version, obs/action sizes, seed, steps trained, wall time;
+                         off-policy runs (T21) add "algo" and keep their settings (networks
+                         included) under "offpolicy" instead of "ppo" and "network"
     <out>/progress.jsonl learning curve, one line per eval point (A61)
     <out>/rollout.npz    one recorded run of the trained policy (FlagRollout, A51)
 """
@@ -62,11 +64,24 @@ class SavedPolicy:
     params: tuple
 
     @property
+    def algo(self) -> str:
+        return self.meta.get("algo", "ppo")
+
+    @property
     def network(self) -> NetworkSpec:
         return network_from_meta(self.meta)
 
     def policy(self, deterministic: bool = True) -> Policy:
         m = self.meta
+        if self.algo != "ppo":
+            from tars_rl.train import offpolicy_nets
+
+            c = m["offpolicy"]
+            inf = offpolicy_nets.make_inference(
+                self.algo, m["action_size"], c["actor_hidden"], c["normalize_observations"],
+                (c["log_std_min"], c["log_std_max"]),
+            )
+            return as_policy(inf, self.params, deterministic)
         inf = make_inference(m["observation_size"], m["action_size"], self.network,
                              m["ppo"]["normalize_observations"])
         return as_policy(inf, self.params, deterministic)
@@ -77,8 +92,9 @@ def save_policy(out: str | Path, params, meta: dict) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     host = jax.tree_util.tree_map(np.asarray, jax.device_get(tuple(params[:2])))
     brax_model.save_params(str(out / PARAMS_FILE), host)
-    spec = network_from_meta(meta)  # always recorded at the top level, in both forms
-    meta = {**meta, "network": spec.to_dict(), "network_str": str(spec)}
+    if meta.get("algo", "ppo") == "ppo":  # off-policy nets live in meta["offpolicy"] (T21)
+        spec = network_from_meta(meta)  # always recorded at the top level, in both forms
+        meta = {**meta, "network": spec.to_dict(), "network_str": str(spec)}
     (out / META_FILE).write_text(json.dumps({"version": POLICY_VERSION, **meta}, indent=2) + "\n")
     return out
 
