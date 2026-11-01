@@ -2,6 +2,8 @@
 # Full training run on the GPU box, started from the Mac over SSH (A62).
 #
 #   TARS_HOST=user@host scripts/train_remote.sh start [seed] [name]   # sync code, start in background
+#   TARS_HOST=user@host scripts/train_remote.sh tune [trials] [name]  # start or resume a tuning
+#                                                                     # campaign (default 48, tune-full)
 #   TARS_HOST=user@host scripts/train_remote.sh status [name]         # tail the run's log
 #   TARS_HOST=user@host scripts/train_remote.sh fetch  [name]         # copy runs/<name> back here
 #
@@ -17,14 +19,22 @@ min_free=${TARS_MIN_FREE_MIB:-12000}
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 case "$cmd" in
-  start)
-    seed=${2:-0}
-    name=${3:-full-seed$seed}
+  start|tune)
+    if [ "$cmd" = start ]; then
+      seed=${2:-0}
+      name=${3:-full-seed$seed}
+      run=(tars_rl.train.run --profile full --seed "$seed" --out "runs/$name")
+    else  # the same command again resumes a stopped campaign from its trial records (T19)
+      trials=${2:-48}
+      name=${3:-tune-full}
+      run=(tars_rl.tune.campaign --profile full --trials "$trials" --seed 0 --out "runs/$name")
+    fi
     rsync -az --delete --exclude .git --exclude .venv --exclude runs --exclude .loopdesk \
       --exclude '.env*' "$root/" "$host:$dir/"
-    ssh "$host" bash -s -- "$dir" "$seed" "$name" "$min_free" <<'EOF'
+    ssh "$host" bash -s -- "$dir" "$name" "$min_free" "${run[@]}" <<'EOF'
 set -euo pipefail
-dir=$1 seed=$2 name=$3 min_free=$4
+dir=$1 name=$2 min_free=$3
+shift 3
 export PATH="$HOME/.local/bin:$PATH"
 free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1)
 if [ "$free" -lt "$min_free" ]; then
@@ -33,10 +43,14 @@ if [ "$free" -lt "$min_free" ]; then
   exit 1
 fi
 cd "$dir"
+# Match the training process only: this bash's own argv also ends in "--out runs/$name".
+if pgrep -f -- "python -m tars_rl\..* --out runs/$name\$" > /dev/null; then
+  echo "runs/$name is already running" >&2
+  exit 1
+fi
 uv sync --extra cuda
 mkdir -p "runs/$name"
-nohup uv run python -m tars_rl.train.run --profile full --seed "$seed" --out "runs/$name" \
-  > "runs/$name/train.log" 2>&1 < /dev/null &
+nohup uv run python -m "$@" >> "runs/$name/train.log" 2>&1 < /dev/null &
 echo "started runs/$name (pid $!) with ${free} MiB GPU free"
 EOF
     ;;
@@ -48,10 +62,11 @@ EOF
     name=${2:-full-seed0}
     mkdir -p "$root/runs"
     rsync -az "$host:$dir/runs/$name" "$root/runs/"
-    echo "fetched runs/$name; score it: uv run python -m tars_rl.train.eval --policy runs/$name"
+    echo "fetched runs/$name; score a run: uv run python -m tars_rl.train.eval --policy runs/$name"
+    echo "  or a campaign: uv run python -m tars_rl.tune.eval_campaign --campaign runs/$name"
     ;;
   *)
-    sed -n '2,10p' "$0"
+    sed -n '2,12p' "$0"
     exit 2
     ;;
 esac

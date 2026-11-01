@@ -90,6 +90,18 @@ Measured 2026-10-31 (`--budget 200 --repeats 5 --seed 0`, ≈ 70 s on the Mac): 
 the known best than random search on 8/8 functions at 200 tries (e.g. hartmann6 gap 0.0019 vs 1.07,
 ackley5 2.35 vs 12.3 with the optimum outside the starting box).
 
+## Tuning campaign (`tars_rl.tune.campaign`, T19)
+
+| ID | Assumption | Status | Depends | Where | How to test | If wrong |
+|---|---|---|---|---|---|---|
+| A80 | Each trial is one record (`trials/NNNN/trial.json`): settings, network description, score and its parts, learning curve, search round and box. | confirmed | | `campaign.run_trial` | `test_campaign_writes_one_record_per_trial_and_marks_failures` | change the record dict in `run_trial` |
+| A83 | Each trial trains for a medium-length run, long enough to give every setting a fair chance. | confirmed | | `campaign.PROFILES` | T20: low-ranked settings overtake top ones when trained longer (signpost) | raise `num_timesteps` |
+| A84 | A trial's score blends success, distance closed and learning speed; success weighted most, speed least. | confirmed | | `tune.score` | trials with clearly better videos must not score lower (signpost) | edit `tune.score` |
+| A106 | Score = 0.6 × held-out success + 0.3 × distance closed (clipped ±1) + 0.1 × speed; speed = area under the learning curve of the same success/closed mix. | proposed | A84 | `score.WEIGHTS`, `score.curve_speed` | eval section 1 prints each weighted part | edit `tune.score`; rescore from the records |
+| A107 | On the 5080 a trial trains 50M steps (¼ of the full run); 8 trials in round 0, 4 per round after, 48 by default; 256 held-out flags each. | proposed | A83 | `campaign.PROFILES["full"]`, `scripts/train_remote.sh tune` | time trial 0 on the 5080; T20 longer retrains | edit the `full` tune profile (new `--out`) |
+| A108 | Every trial of a campaign trains with the same seed and is scored on the same held-out flags; a trial that errors or gives NaN scores −1. | proposed | | `campaign.run_trial`, `score.FAILED` | T20 retrains winners on fresh seeds (A87) | vary the seed per trial in `run_trial` |
+| A109 | The tuner searches 7 PPO settings (lr, entropy, discount, unroll, updates per batch, grad clip, reward scale) plus each tower's block, depth, width, activation and norm; env counts and batch sizes stay as the profile sets them. The box starts centred on the Go1 settings and T15's networks. | proposed | A59, A77, A92 | `tune.tars_space` | eval section 2: a centre stuck at a range edge means the range is too narrow | edit `SPACE` / `PPO_KEYS` |
+
 ## First training run (`tars_rl.train`, T15)
 
 | ID | Assumption | Status | Depends | Where | How to test | If wrong |

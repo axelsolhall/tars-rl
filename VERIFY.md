@@ -165,3 +165,26 @@ render ≈ 0.3–0.9 s per sim s.
    SotA block set to start T19's search from, or should another block (e.g. SimbaV2's hyperspherical
    normalisation) be added first?
 5. **Checks.** `uv run ruff check src/tars_rl/train tests/train` and `uv run pytest tests/train`.
+
+## T19 Tuning campaign (`tars_rl.tune.campaign`)
+
+1. **Mac smoke campaign.** `uv run python -m tars_rl.tune.campaign --profile smoke --trials 6 --seed 0
+   --out runs/tune_smoke` (~8 min), then `uv run python -m tars_rl.tune.eval_campaign --campaign
+   runs/tune_smoke`. Only proves the loop: 5,120 steps per trial cannot learn, so every score sits
+   near 0 and "best above published: YES/NO" is noise. Measured 2026-11-01: 6 trials, ~80 s each,
+   totals −0.004 … +0.004, 0 % success everywhere; `runs/tune_smoke/campaign.png` written.
+2. **5080 campaign.** Free the GPU first, then from the Mac:
+   `TARS_HOST=user@host scripts/train_remote.sh tune 48` (folder `runs/tune-full`),
+   `... status tune-full`, `... fetch tune-full`, then the eval with `--campaign runs/tune-full`.
+   Each trial is 50M steps (A107); check trial 0's `wall_s` in its record to size the campaign.
+   - [ ] The best-score-per-trial plot (left panel of `campaign.png`) rises above the dashed
+     published-settings line (trial 0 = Go1 settings, same 50M steps; T15's 200M run is longer).
+3. **Resume.** Stop the campaign mid-trial (kill the process on the PC, or Ctrl-C the smoke run),
+   then run the same command again.
+   - [ ] The log says `trial N: already done ... not retrained` for every finished trial and only
+     the unfinished trial and later ones train (`test_stopped_campaign_resumes_without_retraining_
+     finished_trials` checks the same with a fake trainer).
+4. **Score parts.** Eval section 1 prints raw success / closed / speed, then each weighted share
+   (`=succ`, `+clos`, `+spd`) adding up to `total` (A106).
+   - [ ] You can see from those columns why a trial ranked where it did.
+5. **Checks.** `uv run ruff check src/tars_rl/tune tests/tune` and `uv run pytest tests/tune`.
