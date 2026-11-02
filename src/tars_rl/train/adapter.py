@@ -45,6 +45,17 @@ class PlaygroundFlagEnv:
     def mjx_model(self):
         return self.env.mjx_model
 
+    # Domain randomization (tars_rl.env.randomize): Playground's wrapper swaps
+    # `unwrapped._mjx_model` for each env's own model while it traces reset/step, so the swap
+    # must reach the model FlagEnv steps with.
+    @property
+    def _mjx_model(self):
+        return self.env.mjx_model
+
+    @_mjx_model.setter
+    def _mjx_model(self, model) -> None:
+        self.env.mjx_model = model
+
     @property
     def dt(self) -> float:
         return self.env.dt

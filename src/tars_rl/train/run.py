@@ -28,9 +28,11 @@ import jax
 from brax.training.agents.ppo import train as ppo
 from mujoco_playground import wrapper
 
+from tars_rl.env import randomize
 from tars_rl.env.config import EnvConfig
 from tars_rl.env.eval import _freeze, run_episodes  # T13's batch runner; freezes done episodes
 from tars_rl.env.flag_env import FlagEnv
+from tars_rl.env.randomize import DomainRandConfig
 from tars_rl.env.rollout import FlagRollout
 from tars_rl.train.adapter import PlaygroundFlagEnv
 from tars_rl.train.config import PPOConfig, get_profile
@@ -89,7 +91,8 @@ def _version(pkg: str) -> str | None:
 
 
 def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None,
-          env_config: EnvConfig | None = None, log=print) -> dict:
+          env_config: EnvConfig | None = None, log=print,
+          domain_rand: DomainRandConfig | None = None) -> dict:
     cfg = cfg or get_profile(profile)
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -143,6 +146,8 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
         normalize_observations=cfg.normalize_observations,
         action_repeat=cfg.action_repeat,
         network_factory=network_factory(cfg.network),
+        # Each parallel env gets its own TARS and floor (tars_rl.env.randomize); None = nominal.
+        randomization_fn=randomize.for_env(env, domain_rand) if domain_rand is not None else None,
         seed=seed,
         progress_fn=progress_fn,
         policy_params_fn=policy_params_fn,
@@ -155,6 +160,7 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
         "observation_size": env.observation_size, "action_size": env.action_size,
         "num_timesteps": cfg.num_timesteps, "train_wall_s": wall, "git_commit": _git_commit(),
         "versions": {p: _version(p) for p in ("jax", "mujoco", "mujoco-mjx", "brax", "playground")},
+        "domain_rand": domain_rand.to_dict() if domain_rand is not None else None,
     }
     save_policy(out, params, meta)
 
@@ -171,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", required=True)
     p.add_argument("--timesteps", type=int, help="override the profile's num_timesteps")
+    p.add_argument("--domain-rand", action="store_true",
+                   help="randomize friction, masses, motor strength and centre of mass per env "
+                   "(tars_rl.env.randomize, default ranges)")
     p.add_argument("--network", help="network description (tars_rl.train.networks), e.g. "
                    "'policy=simba-2x128-relu-layer-e4 value=bro-2x256-relu-layer'; "
                    "default: the profile's")
@@ -178,7 +187,8 @@ def main(argv: list[str] | None = None) -> int:
     over = {"num_timesteps": a.timesteps} if a.timesteps else {}
     if a.network:
         over["network"] = a.network
-    train(a.profile, a.seed, a.out, get_profile(a.profile, **over))
+    dr = DomainRandConfig() if a.domain_rand else None
+    train(a.profile, a.seed, a.out, get_profile(a.profile, **over), domain_rand=dr)
     return 0
 
 
