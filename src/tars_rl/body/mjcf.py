@@ -47,11 +47,17 @@ def build_mjcf(spec: BodySpec) -> str:
       </body>""")
     acts = [_actuator(j, spec.hinge_servo if j.endswith("hinge") else spec.slide_servo,
                       spec.joint_range(j)) for j in spec.joint_names]
+    # Euler, not implicitfast: MJX's implicitfast keeps a servo's damping derivative while its
+    # force is clamped at the limit, which CPU MuJoCo (and real physics) drop. With servos at
+    # their limit most of the time, MJX training then learns on a braking force that MuJoCo,
+    # Unreal and the real robot do not have (found 2026-11-03: the GRU policy fell in 50 % of CPU
+    # MuJoCo episodes, 0.4 % in MJX). Euler is identical in both and stable at 2 ms for these
+    # servos (slide: dt / (2 m / kv) ~ 0.6 with the arm's 0.5 kg).
     return f"""<!-- Generated from BodySpec '{spec.name}' v{spec.version} by tars_rl.body.mjcf.
      Do not edit by hand. -->
 <mujoco model="{spec.name}">
   <compiler angle="radian" autolimits="true"/>
-  <option timestep="{_f(spec.timestep)}" integrator="implicitfast" solver="Newton"
+  <option timestep="{_f(spec.timestep)}" integrator="Euler" solver="Newton"
           iterations="20" ls_iterations="10"/>
   <visual>
     <global offwidth="1280" offheight="720"/>

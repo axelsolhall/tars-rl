@@ -2,7 +2,7 @@
      Do not edit by hand. -->
 <mujoco model="tars_v1">
   <compiler angle="radian" autolimits="true"/>
-  <option timestep="0.002" integrator="implicitfast" solver="Newton"
+  <option timestep="0.002" integrator="Euler" solver="Newton"
           iterations="20" ls_iterations="10"/>
   <visual>
     <global offwidth="1280" offheight="720"/>

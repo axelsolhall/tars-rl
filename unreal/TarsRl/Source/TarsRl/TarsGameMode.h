@@ -1,5 +1,8 @@
-// Puts TARS on whatever floor the level has (or a plain one if it has none) and parks the
-// spectator camera in front of it, so pressing Play in any basic level runs the comparison.
+// Two ways to play the TarsRl project, picked on the command line:
+//   bridge (default)       a Python policy drives TARS through ATarsBridge on -TarsPort=5577,
+//                          with fixed -TarsDt=0.02 s frames that never wait for the wall clock
+//   -TarsMode=sequence     T10: TARS plays the scripted sequence and records its poses
+// Both find the floor of the map (or lay a plain one) and use it as the level origin.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -14,4 +17,9 @@ class TARSRL_API ATarsGameMode : public AGameModeBase
 public:
 	ATarsGameMode();
 	virtual void StartPlay() override;
+
+private:
+	double FindOrMakeFloor() const;
+	void StartSequence(double FloorZ);
+	void StartBridge(double FloorZ);
 };

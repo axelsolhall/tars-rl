@@ -7,9 +7,12 @@
 // The carriage is a tiny invisible body with no collisions. A third, fully free constraint
 // between central and arm only disables their collision, like MuJoCo's <exclude>.
 //
-// Each tick it plays the scripted target sequence (Content/TarsData/sequence.json) and records
-// the three slab poses to Saved/TarsRuns/unreal_poses.csv for `python -m tars_rl.unreal.eval`.
-// Nothing is replayed: the motion is Unreal's physics answering the targets.
+// Two modes. Scripted (T10, the default for a placed actor): each tick it plays the target
+// sequence (Content/TarsData/sequence.json) and records the three slab poses to
+// Saved/TarsRuns/unreal_poses.csv for `python -m tars_rl.unreal.eval`. Bridge (bScripted false,
+// spawned by ATarsBridge): no tick of its own; the bridge sets servo targets each control step
+// and reads the slab states back for the policy. Nothing is replayed in either mode: the motion
+// is Unreal's physics answering the targets.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -25,6 +28,15 @@ class FJsonObject;
 struct FTarsServo
 {
 	double Kp = 0, Kv = 0, ForceLimit = 0;  // SI: N/m or Nm/rad, N s/m or Nm s/rad, N or Nm
+};
+
+// One slab's physics state, Unreal units: cm, cm/s, rad/s, world frame.
+struct FTarsSlabState
+{
+	FVector Pos = FVector::ZeroVector;
+	FQuat Rot = FQuat::Identity;
+	FVector Vel = FVector::ZeroVector;  // at the slab's centre (its body frame origin in MuJoCo)
+	FVector AngVel = FVector::ZeroVector;
 };
 
 struct FTarsBodySpec
@@ -45,6 +57,16 @@ class TARSRL_API ATarsActor : public AActor
 
 public:
 	ATarsActor();
+
+	// False: driven by ATarsBridge (set before FinishSpawning).
+	UPROPERTY(EditAnywhere, Category = "TARS") bool bScripted = true;
+	bool IsReady() const { return bReady; }
+	// Servo targets in SI, actuator order (left_hinge, right_hinge, left_slide, right_slide).
+	void SetTargets(const TArray<double>& Targets) { ApplyTargets(Targets); }
+	// Central, left arm, right arm.
+	TArray<FTarsSlabState> ReadSlabs() const;
+	FVector CentralLocation() const;
+	double BodyHeightCm() const { return Spec.CentralSizeM.Z * 100.0; }
 
 	// Relative to the project's Content directory, written by `python -m tars_rl.unreal.export`.
 	UPROPERTY(EditAnywhere, Category = "TARS") FString SpecFile = TEXT("TarsData/body_spec.json");

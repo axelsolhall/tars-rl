@@ -217,3 +217,27 @@ def test_eval_runs_small(tmp_path):
     assert r.qpos.shape[1] == 7 + 4 and len(r.qpos) >= 2
     assert r.flag_track.shape == (len(r.qpos), 3) and np.allclose(r.flag_track[0], r.flag_pos)
     assert res["flags"] == "chain" and "tags_per_ep" in res["policies"]["zero"]
+
+
+def test_mjx_trains_on_the_same_physics_as_cpu_mujoco_when_servos_saturate():
+    # Servos at their force limit (the usual case with the hobby servos) once made MJX's
+    # implicitfast integrator brake where CPU MuJoCo, Unreal and real physics do not; the body
+    # uses Euler so training physics and every check outside MJX agree.
+    import mujoco
+    from mujoco import mjx
+
+    env = FlagEnv()
+    m = env.mj_model
+    d = mujoco.MjData(m)
+    d.qpos[2] += 1.0  # in the air: only the servos act
+    mujoco.mj_forward(m, d)
+    dx = mjx.put_data(m, d)
+    ctrl = np.array([0.6, -0.6, 0.03, -0.03])  # far beyond what 1.5 Nm reaches in 20 ms
+    d.ctrl[:] = ctrl
+    dx = dx.replace(ctrl=ctrl)
+    step = jax.jit(lambda x: mjx.step(env.mjx_model, x))
+    for _ in range(10):
+        mujoco.mj_step(m, d)
+        dx = step(dx)
+    assert np.allclose(d.actuator_force[:2], [1.5, -1.5]), "hinges must be saturated here"
+    assert np.abs(np.asarray(dx.qvel) - d.qvel).max() < 1e-3

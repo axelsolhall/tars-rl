@@ -18,6 +18,7 @@ accelerometer checks. The exit code is non-zero if a tipped check fails.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import sys
 import time
@@ -54,17 +55,43 @@ def _freeze(done: jax.Array, old, new):
     return jax.tree_util.tree_map(pick, old, new)
 
 
-def run_episodes(env: FlagEnv, policy: Policy, rng: jax.Array, n: int) -> dict[str, np.ndarray]:
-    """n episodes in parallel to their end; per-episode results plus episode 0's qpos frames."""
+def _with_model(env: FlagEnv, fn):
+    """`fn` run against one sampled model: vmapping this over a batched model (domain
+    randomization) gives every episode its own TARS and floor."""
+
+    def call(model, *args):
+        old = env.mjx_model
+        env.mjx_model = model
+        try:
+            return fn(*args)
+        finally:
+            env.mjx_model = old
+
+    return call
+
+
+def run_episodes(env: FlagEnv, policy: Policy, rng: jax.Array, n: int,
+                 models: tuple | None = None) -> dict[str, np.ndarray]:
+    """n episodes in parallel to their end; per-episode results plus episode 0's qpos frames.
+    `models`: (batched model, in_axes) from `tars_rl.env.randomize`, one per episode; None runs
+    every episode on the nominal model."""
     k_reset, k_pol = jax.random.split(rng)
+    if models is None:
+        reset, step = jax.vmap(env.reset), jax.vmap(env.step)
+    else:
+        model_v, axes = models
+        reset = functools.partial(jax.vmap(_with_model(env, env.reset), in_axes=(axes, 0)),
+                                  model_v)
+        step = functools.partial(jax.vmap(_with_model(env, env.step), in_axes=(axes, 0, 0)),
+                                 model_v)
 
     @jax.jit
     def go(k_reset, k_pol):
-        s0 = jax.vmap(env.reset)(jax.random.split(k_reset, n))
+        s0 = reset(jax.random.split(k_reset, n))
 
         def body(carry, k):
             s, ret = carry
-            new = jax.vmap(env.step)(s, policy(k, s.obs))
+            new = step(s, policy(k, s.obs))
             ret = ret + jnp.where(s.done, 0.0, new.reward)
             new = _freeze(s.done, s, new)
             return (new, ret), (new.data.qpos[0], new.flag_pos[0])

@@ -319,9 +319,41 @@ void ATarsActor::SaveRecording()
 	bSaved = true;
 }
 
+TArray<FTarsSlabState> ATarsActor::ReadSlabs() const
+{
+	TArray<FTarsSlabState> Out;
+	for (const UStaticMeshComponent* B : {Central.Get(), Arms[0].Get(), Arms[1].Get()})
+	{
+		FTarsSlabState S;
+		S.Pos = B->GetComponentLocation();
+		S.Rot = B->GetComponentQuat();
+		// At the slab's centre, not its centre of mass: MuJoCo reports body-origin velocities.
+		S.Vel = B->GetPhysicsLinearVelocityAtPoint(S.Pos);
+		S.AngVel = B->GetPhysicsAngularVelocityInRadians();
+		Out.Add(S);
+	}
+	return Out;
+}
+
+FVector ATarsActor::CentralLocation() const
+{
+	return Central ? Central->GetComponentLocation() : GetActorLocation();
+}
+
 void ATarsActor::BeginPlay()
 {
 	Super::BeginPlay();
+	if (!bScripted)
+	{
+		SetActorTickEnabled(false);  // the bridge drives it
+		bReady = CubeMesh && LoadSpec();
+		if (bReady)
+		{
+			BuildBody();
+			ApplyTargets({0.0, 0.0, 0.0, 0.0});  // neutral: every joint at 0 (checked in Python)
+		}
+		return;
+	}
 	bReady = CubeMesh && LoadSpec() && LoadSequence();
 	if (!bReady)
 	{
@@ -345,6 +377,6 @@ void ATarsActor::Tick(float DeltaSeconds)
 
 void ATarsActor::EndPlay(const EEndPlayReason::Type Reason)
 {
-	SaveRecording();  // a run stopped early is still worth comparing
+	if (bScripted) SaveRecording();  // a run stopped early is still worth comparing
 	Super::EndPlay(Reason);
 }

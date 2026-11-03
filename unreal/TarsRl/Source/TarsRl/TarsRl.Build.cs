@@ -6,7 +6,7 @@ public class TarsRl : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		PublicDependencyModuleNames.AddRange(new string[] {
-			"Core", "CoreUObject", "Engine", "PhysicsCore", "Json"
+			"Core", "CoreUObject", "Engine", "PhysicsCore", "Json", "Sockets", "Networking"
 		});
 	}
 }

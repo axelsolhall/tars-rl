@@ -19,17 +19,22 @@ from pathlib import Path
 
 import jax
 
+from tars_rl.env import randomize
 from tars_rl.env.config import FLAG_MODES, EnvConfig, RewardConfig
 from tars_rl.env.eval import random_policy, report, run_episodes, summarize, zero_policy
 from tars_rl.env.flag_env import FlagEnv
+from tars_rl.env.randomize import DomainRandConfig
 from tars_rl.train.policy import load_policy, read_progress
 
 EVAL_SEED_OFFSET = 2_000  # eval flags differ from training and learning-curve flags
+EVAL_MODELS_OFFSET = 3_000  # held-out randomized bodies (training draws from its own seed)
 
 
 def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool = True,
-             flags: str | None = None) -> dict:
-    """`flags` overrides the flag mode (T26); runs saved before T26 have none and get chain."""
+             flags: str | None = None, domain_rand: DomainRandConfig | None = None) -> dict:
+    """`flags` overrides the flag mode (T26); runs saved before T26 have none and get chain.
+    `domain_rand`: every episode gets its own randomized TARS and floor, drawn from a key no
+    training run uses (held-out bodies), the same draws for every policy."""
     saved = load_policy(policy_dir)
     m = saved.meta
     over = {"flags": flags} if flags else {}
@@ -45,14 +50,19 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool =
         "policy": str(policy_dir), "profile": m["profile"], "algo": saved.algo,
         "obs_set": env.config.obs, "observation_size": env.observation_size,
         "flags": env.config.flags, "policies": {},
+        "domain_rand": domain_rand.to_dict() if domain_rand is not None else None,
     }
+    models = None
+    if domain_rand is not None:
+        keys = jax.random.split(jax.random.PRNGKey(seed + EVAL_MODELS_OFFSET), episodes)
+        models = randomize.for_env(env, domain_rand)(env.mjx_model, keys)
     runs = [("trained", saved.policy())]
     if baselines:
         n = env.action_size
         runs += [("random", random_policy(n)), ("still", zero_policy(n))]
     for name, pol in runs:
         t0 = time.perf_counter()
-        s = summarize(run_episodes(env, pol, rng, episodes), env)
+        s = summarize(run_episodes(env, pol, rng, episodes, models), env)
         s["wall_s"] = time.perf_counter() - t0
         res["policies"][name] = s
     p = res["policies"]
@@ -67,6 +77,8 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool =
 
 def report_all(res: dict) -> None:
     print(f"Policy {res['policy']} ({res.get('algo', 'ppo')}, profile {res['profile']})")
+    if res.get("domain_rand"):
+        print(f"Scored on randomized TARS: {res['domain_rand']}")
     report(res)
     print(f"\nTrained beats random and still (success up, distance down): "
           f"{'YES' if res['beats_baselines'] else 'NO'}")
@@ -88,9 +100,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--flags", choices=FLAG_MODES,
                    help="flag mode (default: the run's own; chain for runs saved before T26)")
+    p.add_argument("--domain-rand", action="store_true",
+                   help="score on randomized TARS bodies and floors (default ranges)")
     p.add_argument("--json", help="also write the results to this JSON file")
     a = p.parse_args(argv)
-    res = evaluate(a.policy, a.episodes, a.seed, flags=a.flags)
+    res = evaluate(a.policy, a.episodes, a.seed, flags=a.flags,
+                   domain_rand=DomainRandConfig() if a.domain_rand else None)
     report_all(res)
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
