@@ -322,7 +322,8 @@ void ATarsActor::SaveRecording()
 TArray<FTarsSlabState> ATarsActor::ReadSlabs() const
 {
 	TArray<FTarsSlabState> Out;
-	for (const UStaticMeshComponent* B : {Central.Get(), Arms[0].Get(), Arms[1].Get()})
+	// Non-const: GetPhysicsLinearVelocityAtPoint is not a const member.
+	for (UStaticMeshComponent* B : {Central.Get(), Arms[0].Get(), Arms[1].Get()})
 	{
 		FTarsSlabState S;
 		S.Pos = B->GetComponentLocation();

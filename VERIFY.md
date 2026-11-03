@@ -51,8 +51,9 @@ Setup once: `uv sync`. Needs T3's `tars_rl.body` on the branch.
 
 ## T10 TARS in Unreal (`tars_rl.unreal`, `unreal/TarsRl`)
 
-Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run by the agent
-(no Unreal on its side): the C++ compiles for the first time on your machine.
+Setup once: `uv sync`; Unreal Engine 5.5 for Linux on the GPU box in `~/UnrealEngine`, then
+`scripts/unreal.sh build` (2026-11-03: moved from the Mac to the box). On the box, step 2 is
+`scripts/unreal.sh sequence` instead of the Xcode route below.
 
 1. **Export the data Unreal reads** (only after a body or sequence change; tests fail if stale):
    `uv run python -m tars_rl.unreal.export` → `unreal/TarsRl/Content/TarsData/{body_spec,sequence}.json`.
@@ -71,6 +72,33 @@ Setup once: `uv sync`; Unreal Engine 5.5 and Xcode on the Mac. Not built or run 
      Sluggish or overshooting joints: tune `AngularGainScale` / `LinearGainScale` (A72).
    - Your call: are the gaps small enough that a MuJoCo-trained policy is worth trying in Unreal?
 4. **Checks.** `uv run ruff check .` and `uv run pytest tests/unreal -q`.
+
+## Unreal verification of trained policies (`tars_rl.unreal.verify`, roadmap stage 4)
+
+Setup once (box): Unreal 5.5 for Linux unzipped to `~/UnrealEngine` (~60 GB), then
+`scripts/unreal.sh build`. Not compiled yet (2026-11-03): expect a round of compile fixes.
+
+0. **Without Unreal** (any machine): `uv run pytest tests/env/test_levels.py tests/unreal -q`.
+   A stand-in speaking the bridge protocol (MuJoCo behind it) must reproduce MuJoCo exactly;
+   `uv run python -m tars_rl.env.levels --png runs/levels` prints and draws the six levels.
+1. **The loop matches training.** `uv run python -m tars_rl.unreal.verify --policy <run>
+   --engines mjx mujoco --episodes 64`: the mjx column (training physics, same flags) should
+   match `tars_rl.train.eval` on the same run within noise. The mujoco (CPU) column is already a
+   small sim-to-sim step: box-floor contacts differ from MJX (2026-11-03, the old GRU fell 72 %
+   in MJX vs 50 % in CPU MuJoCo on the Euler body).
+2. **Watch it.** On the box: `scripts/unreal.sh view`, then
+   `uv run python -m tars_rl.unreal.verify --policy <run> --engines unreal --realtime --level flat`.
+   - Check: TARS (3 slabs) walks to a red flag; the flag jumps when tagged; the top line shows
+     episode, time, flags and distance; the camera follows.
+   - Try `--level bumpy | steps | slopes | obstacles | apartment` (boxes as in the PNGs).
+3. **The gate (fast).** `scripts/unreal.sh fast 4`, then
+   `uv run python -m tars_rl.unreal.verify --policy <run> --level flat --episodes 64
+   --ports 5577 5578 5579 5580 --json runs/unreal/<run>-flat.json`, `scripts/unreal.sh stop`.
+   - Prints mjx, mujoco and unreal side by side with each gap to mjx; `steps_per_s` says how
+     fast each ran.
+   - Your call: is the flat-floor gap small enough to move on to the harder levels?
+   - Big gap with a falling TARS: first run T10 (`scripts/unreal.sh sequence` + its eval);
+     the body itself (gains A72, signs A74) may not match before the policy is to blame.
 
 ## T17 Self-guiding search (`tars_rl.tune`)
 

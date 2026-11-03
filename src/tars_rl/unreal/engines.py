@@ -1,4 +1,4 @@
-"""The two physics engines a policy is verified in, behind one small interface.
+"""The physics engines a policy is verified in, behind one small interface.
 
     load(level)                      build the level's boxes
     reset(spawn_xy, flag) -> state   TARS standing at neutral on the floor at spawn_xy, facing +x
@@ -6,18 +6,24 @@
     step(ctrl, hud) -> state         apply servo targets (SI, actuator order), advance one
                                      control step (ctrl_dt), return the new BodyState
 
-`MujocoEngine` is CPU MuJoCo on the exact model FlagEnv trains on, plus the level's boxes: on the
-flat level it is the training environment. `UnrealEngine` is Unreal's own physics (Chaos) through
-the bridge. The verification loop (`tars_rl.unreal.verify`) only sees this interface, so the gap
-it reports is the engines' gap, not two different episode loops.
+Three engines, from the training physics outwards:
+    mjx      MJX on the model FlagEnv trains on (plus the level's boxes): the training physics
+    mujoco   CPU MuJoCo on the same model. Not identical to MJX: box-floor contacts differ (up to
+             0.5 rad/s per 2 ms substep from the same state, 2026-11-03), so this is already a
+             small sim-to-sim step
+    unreal   Unreal's own physics (Chaos) through the bridge
+The verification loop (`tars_rl.unreal.verify`) only sees this interface, so the gaps it reports
+are the engines' gaps, not different episode loops.
 """
 
 from __future__ import annotations
 
 from typing import Protocol
 
+import jax
 import mujoco
 import numpy as np
+from mujoco import mjx
 
 from tars_rl.body.spec import BodySpec
 from tars_rl.env.arena import FLAG_BODY, build_arena_mjcf
@@ -27,6 +33,7 @@ from tars_rl.unreal.bodystate import BodyState, body_ids, from_mujoco
 from tars_rl.unreal.bridge import (
     DEFAULT_PORT,
     BridgeClient,
+    BridgeError,
     level_to_ue,
     point_to_ue,
     state_from_ue,
@@ -92,6 +99,28 @@ class MujocoEngine:
         pass
 
 
+class MjxEngine(MujocoEngine):
+    """MJX physics (what training runs on), read back through CPU MjData for the BodyState."""
+
+    name = "mjx"
+
+    def load(self, level: Level) -> None:
+        super().load(level)
+        model, n = mjx.put_model(self.m), self.n_sub
+        self._advance = jax.jit(
+            lambda d: jax.lax.fori_loop(0, n, lambda _, x: mjx.step(model, x), d))
+
+    def reset(self, spawn_xy: np.ndarray, flag: np.ndarray) -> BodyState:
+        s = super().reset(spawn_xy, flag)
+        self.dx = mjx.put_data(self.m, self.d)
+        return s
+
+    def step(self, ctrl: np.ndarray, hud: str | None = None) -> BodyState:
+        self.dx = self._advance(self.dx.replace(ctrl=np.asarray(ctrl, self.dx.ctrl.dtype)))
+        mjx.get_data_into(self.d, self.m, self.dx)
+        return from_mujoco(self.m, self.d, self.ids)
+
+
 class UnrealEngine:
     name = "unreal"
 
@@ -106,6 +135,7 @@ class UnrealEngine:
         if abs(sub - ctrl_dt) > 1e-9:
             raise ValueError(f"Unreal runs {self.client.substeps} physics substeps per step; "
                              f"MuJoCo runs {round(ctrl_dt / spec.timestep)}")
+        self.ctrl_dt = ctrl_dt
         self.level: Level | None = None
 
     def load(self, level: Level) -> None:
@@ -125,7 +155,11 @@ class UnrealEngine:
         msg: dict = {"op": "step", "ctrl": [float(c) for c in ctrl]}
         if hud:
             msg["hud"] = hud
-        return state_from_ue(self.client.request(msg))
+        reply = self.client.request(msg)
+        if abs(float(reply["dt"]) - self.ctrl_dt) > 1e-6:
+            raise BridgeError(f"Unreal advanced {reply['dt']} s for one step, not {self.ctrl_dt}: "
+                              "its fixed time step is off (bridge mode turns it on)")
+        return state_from_ue(reply)
 
     def close(self) -> None:
         self.client.close()

@@ -8,8 +8,8 @@ Run (Unreal started with scripts/unreal.sh, see VERIFY.md):
 One episode loop drives either engine (`tars_rl.unreal.engines`) with FlagEnv's rules: the
 policy's observation window, the servo speed cap, chain flags drawn by FlagEnv's own sampler
 from the same keys as `tars_rl.train.eval`, tags, falls and the reward. On the flat level the
-MuJoCo column is the training environment, so it should match `train.eval`'s numbers; the
-Unreal column next to it is the sim-to-sim gap (roadmap stage 4). Other levels add the boxes
+mjx column is the training physics, so it should match `train.eval`'s numbers; mujoco (CPU)
+and unreal next to it are the sim-to-sim gaps (roadmap stage 4). Other levels add the boxes
 of `tars_rl.env.levels` to both engines; flags there are redrawn until the straight walk to
 them is clear of furniture (the blind policy leaves routing to the decider).
 
@@ -40,7 +40,7 @@ from tars_rl.train.eval import EVAL_SEED_OFFSET
 from tars_rl.train.policy import load_policy
 from tars_rl.unreal.bodystate import OBS_SETS_SUPPORTED, BodyState, observe_default
 from tars_rl.unreal.bridge import DEFAULT_PORT
-from tars_rl.unreal.engines import Engine, MujocoEngine, UnrealEngine
+from tars_rl.unreal.engines import Engine, MjxEngine, MujocoEngine, UnrealEngine
 
 FLAG_TRIES = 64  # redraws before a level gives up on finding a clear flag
 METRICS = ("success_rate", "fall_rate", "tags_per_ep", "first_tag_s", "final_dist_m",
@@ -87,7 +87,7 @@ class Rules:
         f = None
         for i in range(FLAG_TRIES):
             k = key if i == 0 else jax.random.fold_in(key, i)
-            f = np.asarray(self._sample(k, jnp.asarray(centre_xy, jnp.float32)), float)
+            f = np.array(self._sample(k, jnp.asarray(centre_xy, jnp.float32)), float)  # a copy
             if self.level.flag_ok(centre_xy, f[:2]):
                 f[2] = self.level.ground_z(f[:2])
                 return f, True
@@ -225,15 +225,15 @@ def report(res: dict) -> None:
     names = list(res["engines"])
     print(f"\nPolicy {res['policy']}  level {res['level']}  {res['episodes']} episodes, "
           f"seed {res['seed']}, flags {res['flags']}")
-    print(f"{'':<22}" + "".join(f"{n:>12}" for n in names)
-          + (f"{'gap':>12}" if len(names) == 2 else ""))
+    gaps = [f"{n}-{names[0]}" for n in names[1:]]
+    print(f"{'':<16}" + "".join(f"{n:>12}" for n in names) + "".join(f"{g:>16}" for g in gaps))
     for k in (*METRICS, "forced_flags", "steps_per_s"):
         vals = [res["engines"][n][k] for n in names]
         pct = k.endswith("_rate") or k == "closed_frac"
-        cell = (lambda v: f"{v:>12.1%}") if pct else (lambda v: f"{v:>12.2f}")
-        line = f"{k:<22}" + "".join(cell(v) for v in vals)
-        if len(names) == 2 and k not in ("forced_flags", "steps_per_s"):
-            line += cell(vals[1] - vals[0])
+        fmt = "{:>%d.1%%}" if pct else "{:>%d.2f}"
+        line = f"{k:<16}" + "".join((fmt % 12).format(v) for v in vals)
+        if k not in ("forced_flags", "steps_per_s"):
+            line += "".join((fmt % 16).format(v - vals[0]) for v in vals[1:])
         print(line)
 
 
@@ -242,8 +242,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--policy", required=True)
     p.add_argument("--level", default="flat", choices=sorted(LEVELS))
     p.add_argument("--level-seed", type=int, default=0)
-    p.add_argument("--engines", nargs="+", default=["mujoco", "unreal"],
-                   choices=["mujoco", "unreal"])
+    p.add_argument("--engines", nargs="+", default=["mjx", "mujoco", "unreal"],
+                   choices=["mjx", "mujoco", "unreal"],
+                   help="mjx = the training physics; gaps print against the first engine")
     p.add_argument("--episodes", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--flags", default="chain", choices=["chain", "single"])
@@ -262,8 +263,9 @@ def main(argv: list[str] | None = None) -> int:
                  "episodes": a.episodes, "seed": a.seed, "flags": a.flags,
                  "realtime": a.realtime, "engines": {}}
     for name in a.engines:
-        if name == "mujoco":
-            make, workers = (lambda w: MujocoEngine(env.spec, env.dt)), 1
+        if name in ("mjx", "mujoco"):
+            cls = MjxEngine if name == "mjx" else MujocoEngine
+            make, workers = (lambda w, cls=cls: cls(env.spec, env.dt)), 1
         else:
             make, workers = (lambda w: UnrealEngine(env.spec, env.dt, a.host, a.ports[w])), len(
                 a.ports)
