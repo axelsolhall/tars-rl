@@ -61,6 +61,10 @@ private:
 	UPROPERTY() TObjectPtr<ATarsLevel> Level;
 	UPROPERTY() TObjectPtr<ACameraActor> Camera;
 	bool bStepPending = false;
+	// Videos: -TarsCamera=top looks down from above the 2.4 m apartment walls (the default follow
+	// camera trails TARS at 1.6 m and ends up outside a room). The camera jumps to TARS on reset.
+	bool bTopCamera = false;
+	bool bSnapCamera = true;
 	int32 StepFrames = 0;  // physics frames run of the pending step
 	double StepTime = 0;
 	double EpisodeTime = 0;

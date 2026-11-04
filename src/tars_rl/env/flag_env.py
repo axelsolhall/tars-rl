@@ -98,6 +98,8 @@ class FlagEnv:
                          else mujoco.MjModel.from_xml_string(xml))
         if self.config.terrain is not None:
             terrain.fill_model(self.mj_model, self.config.terrain)
+        if self.config.friction_cone == "elliptic":
+            self.mj_model.opt.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
         self.mjx_model = mjx.put_model(self.mj_model)
         m = self.mj_model
 

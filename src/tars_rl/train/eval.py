@@ -36,6 +36,17 @@ DIFFICULTY_BANDS = (("flat-easy (0-1/3)", 0.0, 1 / 3), ("medium (1/3-2/3)", 1 / 
                     ("rough (2/3-1)", 2 / 3, 1.0))
 
 
+def eval_env_config(trained: dict, flags: str | None, terrain: TerrainConfig | None) -> EnvConfig:
+    """The env a policy is scored in: its training env (meta["env"]) with the flag mode and the
+    floor this evaluation asks for. The floor is never the run's own: a run trained on terrain is
+    scored on the flat floor unless `terrain` is given (until 2026-11-04 it kept the run's
+    terrain, so a terrain run's "flat" score was a rough-ground one)."""
+    over: dict = {"terrain": terrain}
+    if flags:
+        over["flags"] = flags
+    return EnvConfig.from_dict(trained, **over)
+
+
 def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool = True,
              flags: str | None = None, domain_rand: DomainRandConfig | None = None,
              terrain: TerrainConfig | None = None) -> dict:
@@ -46,10 +57,7 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool =
     the same for every policy), whatever the policy trained on; results also come by difficulty."""
     saved = load_policy(policy_dir)
     m = saved.meta
-    over = {"flags": flags} if flags else {}
-    if terrain is not None:
-        over["terrain"] = terrain
-    env = FlagEnv(config=EnvConfig.from_dict(m["env"], **over))
+    env = FlagEnv(config=eval_env_config(m["env"], flags, terrain))
     if env.spec.version != m["body_spec_version"]:
         raise ValueError(f"policy trained on BodySpec v{m['body_spec_version']}, "
                          f"env has v{env.spec.version}")

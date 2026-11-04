@@ -1,10 +1,13 @@
 // TARS as an Unreal physics actor, built at BeginPlay from the tars-rl BodySpec JSON (A57).
 //
-// Three simulated box slabs (central body + two arms). Each arm hangs on a chain of two
-// Chaos constraints, matching MuJoCo's hinge-then-slide joints (A69):
-//   central --hinge (twist about the body y axis)--> carriage --slide (along the arm)--> arm
-// The carriage is a tiny invisible body with no collisions. A third, fully free constraint
-// between central and arm only disables their collision, like MuJoCo's <exclude>.
+// Three simulated box slabs (central body + two arms). Each arm hangs on one Chaos constraint
+// that holds both of MuJoCo's joints (A69), as MuJoCo puts both in the arm's one body: the
+// hinge is its twist (about the body y axis, through the arm's centre) and the slide its linear
+// z, which Chaos measures along the arm because the arm is the constraint's second component.
+// The constraint also turns off central-arm collisions, like MuJoCo's <exclude>.
+// Until 2026-11-04 a 100 g carriage body sat between a hinge and a slide constraint. Chaos's
+// iterative joint solver made that chain soft: its free fall, push and drag probes were a few
+// percent off MuJoCo and Bullet, which the single constraint matches (tars_rl.unreal.probe).
 //
 // The constraints only hold the joint axes and limits; the servos are ServoStep, MuJoCo's
 // position actuator computed here before every physics step and applied as equal and opposite
@@ -67,13 +70,25 @@ public:
 
 	// False: driven by ATarsBridge (set before FinishSpawning).
 	UPROPERTY(EditAnywhere, Category = "TARS") bool bScripted = true;
+	// Contact probes: build the central slab alone (no arms, joints or servos); the arm slots of
+	// ReadSlabs then repeat the central slab. Set before FinishSpawning.
+	bool bSolo = false;
+	bool bSoloArm = false;  // with bSolo: the lone slab is an arm
+	// Contact probes: hinges and slides locked solid and no servos (TARS as one jointed rigid body).
+	bool bLocked = false;
 	bool IsReady() const { return bReady; }
 	// Servo targets in SI, actuator order (left_hinge, right_hinge, left_slide, right_slide).
 	void SetTargets(const TArray<double>& InTargets) { ApplyTargets(InTargets); }
 	// The four servo forces for the coming physics step, from the current slab states.
 	void ServoStep();
+	// For contact probes: a constant force (kg cm/s^2, world) at a point of the central slab
+	// (cm from its centre, in its own frame), every physics step until changed.
+	void SetPush(const FVector& Force, const FVector& AtLocal) { Push = Force; PushAt = AtLocal; }
 	// Central, left arm, right arm.
 	TArray<FTarsSlabState> ReadSlabs() const;
+	// One-step probes (tars_rl.unreal.onestep): teleport the three slabs to these states (world,
+	// as ReadSlabs gives them). Jointed TARS only.
+	void WriteSlabs(const TArray<FTarsSlabState>& In);
 	FVector CentralLocation() const;
 	double BodyHeightCm() const { return Spec.CentralSizeM.Z * 100.0; }
 
@@ -87,7 +102,6 @@ public:
 	// +1 for both: the mirror in y (A73) keeps a turn about y and a move along z as they are.
 	UPROPERTY(EditAnywhere, Category = "TARS") float HingeSign = 1.f;
 	UPROPERTY(EditAnywhere, Category = "TARS") float SlideSign = 1.f;
-	UPROPERTY(EditAnywhere, Category = "TARS") float CarriageMassKg = 0.01f;
 
 protected:
 	virtual void BeginPlay() override;
@@ -99,7 +113,7 @@ private:
 	bool LoadSequence();
 	void BuildBody();
 	UStaticMeshComponent* MakeBox(FName Name, const FVector& SizeCm, float MassKg,
-		const FVector& LocalCm, bool bCollide);
+		const FVector& LocalCm);
 	UPhysicsConstraintComponent* MakeConstraint(FName Name, const FVector& LocalCm,
 		const FRotator& LocalRot);
 	TArray<double> TargetsAt(double T) const;
@@ -111,13 +125,11 @@ private:
 	UPROPERTY() TObjectPtr<UPhysicalMaterial> SlabMaterial;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Central;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Arms;  // left, right
-	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Carriages;
-	UPROPERTY() TArray<TObjectPtr<UPhysicsConstraintComponent>> Hinges;
-	UPROPERTY() TArray<TObjectPtr<UPhysicsConstraintComponent>> Slides;
-	UPROPERTY() TArray<TObjectPtr<UPhysicsConstraintComponent>> NoCollide;
+	UPROPERTY() TArray<TObjectPtr<UPhysicsConstraintComponent>> Joints;  // hinge + slide per arm
 
 	FTarsBodySpec Spec;
 	TArray<double> Targets = {0, 0, 0, 0};  // SI, actuator order, signs applied
+	FVector Push = FVector::ZeroVector, PushAt = FVector::ZeroVector;
 	TArray<double> KeyTimes;
 	TArray<TArray<double>> KeyTargets;  // per keyframe, actuator order
 	double SimTime = 0;

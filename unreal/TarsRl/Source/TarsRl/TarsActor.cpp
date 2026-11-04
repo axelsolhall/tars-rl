@@ -139,7 +139,7 @@ bool ATarsActor::LoadSequence()
 }
 
 UStaticMeshComponent* ATarsActor::MakeBox(FName Name, const FVector& SizeCm, float MassKg,
-	const FVector& LocalCm, bool bCollide)
+	const FVector& LocalCm)
 {
 	UStaticMeshComponent* B = NewObject<UStaticMeshComponent>(this, Name);
 	B->SetStaticMesh(CubeMesh);
@@ -147,19 +147,15 @@ UStaticMeshComponent* ATarsActor::MakeBox(FName Name, const FVector& SizeCm, flo
 	B->SetRelativeLocation(LocalCm);
 	B->SetRelativeScale3D(SizeCm / 100.0);
 	B->RegisterComponent();
-	if (bCollide)
-	{
-		B->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-		B->SetPhysMaterialOverride(SlabMaterial);
-	}
-	else
-	{
-		B->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
-		B->SetCollisionResponseToAllChannels(ECR_Ignore);
-		B->SetVisibility(false);
-	}
+	B->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
+	B->SetPhysMaterialOverride(SlabMaterial);
 	B->SetLinearDamping(0.f);  // MuJoCo has no body damping
 	B->SetAngularDamping(0.f);
+	// Chaos by default inflates the inertia a long thin body shows its contacts and joints, to
+	// steady them. MuJoCo has nothing like it, and for TARS's 9 x 9 x 36 cm slabs it is far from
+	// small: a lone slab pushed 1 cm above the floor tipped over backwards at 10.5 N, where MuJoCo
+	// and a hand calculation say 21.5 N. Without it the six push heights match MuJoCo (2026-11-04).
+	B->GetBodyInstance()->SetInertiaConditioningEnabled(false);
 	B->SetSimulatePhysics(true);
 	B->SetMassOverrideInKg(NAME_None, MassKg, true);
 	return B;
@@ -197,7 +193,10 @@ void ATarsActor::BuildBody()
 	const double HingeZ = Spec.CentralSizeM.Z / 2 * M2CM;
 	const double ArmY = (Spec.CentralSizeM.Y / 2 + Spec.ArmGap + Spec.ArmSizeM.Y / 2) * M2CM;
 	const FVector Centre(0, 0, HingeZ);
-	Central = MakeBox(TEXT("central"), Spec.CentralSizeM * M2CM, Spec.CentralMass, Centre, true);
+	Central = bSoloArm  // contact probes: a lone arm slab in the central slot
+		? MakeBox(TEXT("central"), Spec.ArmSizeM * M2CM, Spec.ArmMass, Centre)
+		: MakeBox(TEXT("central"), Spec.CentralSizeM * M2CM, Spec.CentralMass, Centre);
+	if (bSolo) return;
 
 	const float HingeLimitDeg = static_cast<float>(FMath::RadiansToDegrees(
 		FMath::Max(FMath::Abs(Spec.HingeRange.X), FMath::Abs(Spec.HingeRange.Y))));
@@ -208,39 +207,19 @@ void ATarsActor::BuildBody()
 	{
 		const FString Side = Sides[I];
 		const FVector ArmPos(0, (I == 0 ? -1 : 1) * ArmY, HingeZ);
-		UStaticMeshComponent* Carriage = MakeBox(*(Side + TEXT("_carriage")), FVector(2, 2, 2),
-			CarriageMassKg, Centre, false);
 		UStaticMeshComponent* Arm = MakeBox(*(Side + TEXT("_arm")), Spec.ArmSizeM * M2CM,
-			Spec.ArmMass, ArmPos, true);
-
-		// Hinge: twist is the constraint's x axis; yaw 90 turns it onto the body y axis.
-		UPhysicsConstraintComponent* Hinge = MakeConstraint(*(Side + TEXT("_hinge")), Centre,
+			Spec.ArmMass, ArmPos);
+		// At the arm's centre, on the hinge axis. Twist is the constraint's x axis, yaw 90 turns it
+		// onto the body y axis; its z stays the arm's length. No drives: ServoStep turns and moves it.
+		UPhysicsConstraintComponent* J = MakeConstraint(*(Side + TEXT("_joint")), ArmPos,
 			FRotator(0, 90, 0));
-		Hinge->SetAngularTwistLimit(ACM_Limited, HingeLimitDeg);  // no drive: ServoStep turns it
-		Hinge->SetConstrainedComponents(Carriage, NAME_None, Central, NAME_None);
-
-		// Slide: along the arm's length (constraint z), carried round by the hinge.
-		UPhysicsConstraintComponent* Slide = MakeConstraint(*(Side + TEXT("_slide")), ArmPos,
-			FRotator::ZeroRotator);
-		Slide->SetLinearZLimit(LCM_Limited, SlideLimitCm);  // no drive: ServoStep moves it
-		Slide->SetConstrainedComponents(Arm, NAME_None, Carriage, NAME_None);
-
-		// Central and arm overlap in no pose MuJoCo checks, but MuJoCo excludes their contact.
-		UPhysicsConstraintComponent* Free = MakeConstraint(*(Side + TEXT("_nocollide")), ArmPos,
-			FRotator::ZeroRotator);
-		Free->SetLinearXLimit(LCM_Free, 0.f);
-		Free->SetLinearYLimit(LCM_Free, 0.f);
-		Free->SetLinearZLimit(LCM_Free, 0.f);
-		Free->SetAngularSwing1Limit(ACM_Free, 0.f);
-		Free->SetAngularSwing2Limit(ACM_Free, 0.f);
-		Free->SetAngularTwistLimit(ACM_Free, 0.f);
-		Free->SetConstrainedComponents(Arm, NAME_None, Central, NAME_None);
-
+		J->SetAngularTwistLimit(bLocked ? ACM_Locked : ACM_Limited, HingeLimitDeg);
+		J->SetLinearZLimit(bLocked ? LCM_Locked : LCM_Limited, SlideLimitCm);
+		// Central first: Chaos then measures the linear z along the arm (the other order slid the
+		// arm along the central slab's z once the hinge turned, 2026-11-04).
+		J->SetConstrainedComponents(Central, NAME_None, Arm, NAME_None);
 		Arms.Add(Arm);
-		Carriages.Add(Carriage);
-		Hinges.Add(Hinge);
-		Slides.Add(Slide);
-		NoCollide.Add(Free);
+		Joints.Add(J);
 	}
 }
 
@@ -273,6 +252,11 @@ void ATarsActor::ServoStep()
 	// from the hinge point along the arm's z. Unreal units in, SI for the servo.
 	const FQuat Qc = Central->GetComponentQuat();
 	const FVector Xc = Central->GetComponentLocation();
+	if (bSolo || bLocked)
+	{
+		if (!Push.IsZero()) Central->AddForceAtLocation(Push, Xc + Qc.RotateVector(PushAt));
+		return;
+	}
 	const FVector Vc = Central->GetPhysicsLinearVelocity();  // the slab's centre is its centre of mass
 	const FVector Wc = Central->GetPhysicsAngularVelocityInRadians();
 	const FVector Axis = Qc.GetAxisY();
@@ -299,6 +283,7 @@ void ATarsActor::ServoStep()
 		Arm->AddForce(ArmZ * F);
 		Central->AddForceAtLocation(-ArmZ * F, Xa);
 	}
+	if (!Push.IsZero()) Central->AddForceAtLocation(Push, Xc + Qc.RotateVector(PushAt));
 }
 
 void ATarsActor::RecordSample()
@@ -342,7 +327,7 @@ TArray<FTarsSlabState> ATarsActor::ReadSlabs() const
 {
 	TArray<FTarsSlabState> Out;
 	// Non-const: GetPhysicsLinearVelocityAtPoint is not a const member.
-	for (UStaticMeshComponent* B : {Central.Get(), Arms[0].Get(), Arms[1].Get()})
+	for (UStaticMeshComponent* B : {Central.Get(), bSolo ? Central.Get() : Arms[0].Get(), bSolo ? Central.Get() : Arms[1].Get()})
 	{
 		FTarsSlabState S;
 		S.Pos = B->GetComponentLocation();
@@ -353,6 +338,21 @@ TArray<FTarsSlabState> ATarsActor::ReadSlabs() const
 		Out.Add(S);
 	}
 	return Out;
+}
+
+void ATarsActor::WriteSlabs(const TArray<FTarsSlabState>& In)
+{
+	auto Place = [](UStaticMeshComponent* B, const FVector& P, const FQuat& Q, const FVector& V, const FVector& W)
+	{
+		B->SetWorldLocationAndRotation(P, Q, false, nullptr, ETeleportType::TeleportPhysics);
+		B->SetPhysicsLinearVelocity(V);  // each slab's centre is its centre of mass
+		B->SetPhysicsAngularVelocityInRadians(W);
+	};
+	Place(Central, In[0].Pos, In[0].Rot, In[0].Vel, In[0].AngVel);
+	for (int32 I = 0; I < 2; ++I)
+	{
+		Place(Arms[I], In[1 + I].Pos, In[1 + I].Rot, In[1 + I].Vel, In[1 + I].AngVel);
+	}
 }
 
 FVector ATarsActor::CentralLocation() const

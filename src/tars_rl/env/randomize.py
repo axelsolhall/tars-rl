@@ -7,6 +7,9 @@ Randomized per env (drawn once when training starts, fixed for the run, as MuJoC
     mass            each body's mass and inertia, scaled (body 2.0 kg, arms 0.5 kg)
     motor strength  each actuator's gain kp and force limit, scaled together (weaker/stronger servo)
     centre of mass  the central body's centre of mass, shifted (battery, electronics placement)
+    friction hardness  MuJoCo's impratio, log-uniform, when set (needs EnvConfig.friction_cone
+                    "elliptic"): 1 is MuJoCo's soft default, which lets TARS creep under pushes
+                    static friction should hold; 10 is near Bullet's hard friction (2026-11-04)
 
 Ranges are `DomainRandConfig`; the defaults sit inside what legged-robot sim-to-real work commonly
 uses (motor strength 0.8-1.2, friction ~0.4-1.25). Not here yet, by design: pushes, action
@@ -44,9 +47,12 @@ class DomainRandConfig:
     mass_scale: tuple[float, float] = (0.8, 1.2)
     motor_strength: tuple[float, float] = (0.8, 1.2)
     com_offset_m: float = 0.01  # each axis, +-
+    impratio: tuple[float, float] | None = None  # None: the model's own (1)
 
     def check(self) -> DomainRandConfig:
-        for name in ("friction", "mass_scale", "motor_strength"):
+        names = ("friction", "mass_scale", "motor_strength")
+        names += ("impratio",) if self.impratio else ()
+        for name in names:
             lo, hi = getattr(self, name)
             if not 0 < lo <= hi:
                 raise ValueError(f"{name} range {lo, hi} must satisfy 0 < low <= high")
@@ -87,9 +93,18 @@ def body_fields_fn(cfg: DomainRandConfig, body_ids: tuple[int, ...], central_id:
             return friction, mass, inertia, gain, bias, force, ipos
 
         friction, mass, inertia, gain, bias, force, ipos = draw(rng)
-        return {"geom_friction": friction, "body_mass": mass, "body_inertia": inertia,
-                "actuator_gainprm": gain, "actuator_biasprm": bias,
-                "actuator_forcerange": force, "body_ipos": ipos}
+        out = {"geom_friction": friction, "body_mass": mass, "body_inertia": inertia,
+               "actuator_gainprm": gain, "actuator_biasprm": bias,
+               "actuator_forcerange": force, "body_ipos": ipos}
+        if cfg.impratio is not None:
+            if int(model.opt.cone) != int(mujoco.mjtCone.mjCONE_ELLIPTIC):
+                raise ValueError("impratio randomization needs EnvConfig(friction_cone="
+                                 "'elliptic'): on the pyramidal cone it barely changes friction")
+            # A key of its own (folded), so the draws above stay what they were without it.
+            lo, hi = np.log(cfg.impratio)
+            out["opt.impratio"] = jnp.exp(jax.vmap(
+                lambda k: _uniform(jax.random.fold_in(k, 11), (), (lo, hi)))(rng))
+        return out
 
     return draw_all
 

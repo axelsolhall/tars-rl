@@ -62,6 +62,7 @@ case "${1:-}" in
     : > "$pids"
     for i in $(seq 0 $((n - 1))); do
       port=$((5577 + i))
+      rm -f "$logs/bridge-$port.log"  # an old log's "listening" line would pass the wait below
       "$editor" "$project" -game -nullrhi -nosound -unattended -TarsPort=$port \
         -abslog="$logs/bridge-$port.log" > /dev/null 2>&1 &
       echo $! >> "$pids"

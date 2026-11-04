@@ -210,6 +210,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--terrain", action="store_true",
                    help="train on rough ground (tars_rl.env.terrain): each env on its own patch, "
                    "from flat to rough")
+    p.add_argument("--contact-dr", action="store_true",
+                   help="also randomize friction hardness per env: elliptic friction cone, "
+                   "impratio log-uniform 1-10 (MuJoCo's soft default to near Bullet's hard "
+                   "friction)")
     p.add_argument("--network", help="network description (tars_rl.train.networks), e.g. "
                    "'policy=simba-2x128-relu-layer-e4 value=bro-2x256-relu-layer'; "
                    "default: the profile's")
@@ -217,8 +221,13 @@ def main(argv: list[str] | None = None) -> int:
     over = {"num_timesteps": a.timesteps} if a.timesteps else {}
     if a.network:
         over["network"] = a.network
-    dr = DomainRandConfig() if a.domain_rand else None
-    env_config = EnvConfig(terrain=TerrainConfig()) if a.terrain else None
+    if a.contact_dr and not a.domain_rand:
+        p.error("--contact-dr is part of domain randomization; drop --no-domain-rand")
+    dr = DomainRandConfig(impratio=(1.0, 10.0) if a.contact_dr else None) if a.domain_rand else None
+    env_config = EnvConfig(terrain=TerrainConfig() if a.terrain else None,
+                           friction_cone="elliptic" if a.contact_dr else "pyramidal")
+    if env_config == EnvConfig():
+        env_config = None
     train(a.profile, a.seed, a.out, get_profile(a.profile, **over), env_config=env_config,
           domain_rand=dr)
     return 0

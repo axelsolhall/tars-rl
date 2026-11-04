@@ -3,13 +3,20 @@
 Unreal (`ATarsBridge`, unreal/TarsRl/Source/TarsRl/TarsBridge.cpp) listens on 127.0.0.1:PORT.
 Python sends a request and waits for its reply; Unreal advances physics only on `step`, so the
 simulation runs exactly as fast as Python asks: paced to the wall clock to watch it, or flat out
-to evaluate. Unreal itself runs fixed 20 ms frames and never waits for the wall clock.
+to evaluate. Unreal runs fixed 2 ms frames (one physics step each, 10 per `step`) and never
+waits for the wall clock.
 
 Requests (Unreal units: cm, cm/s, degrees for yaw, quaternions x y z w, Unreal's frame):
     {"op": "hello"}                                  -> {"ok", "protocol", "dt", "substeps"}
     {"op": "level", "name", "boxes": [{"p", "q", "s", "mu", "rgb"}]}  -> {"ok", "boxes"}
     {"op": "reset", "at", "yaw", "flag"}             -> state (TARS rebuilt at neutral, no step)
+        probes only (`tars_rl.unreal.probe`, scratch checks): "solo": true builds the central
+        slab alone ("solo_arm": an arm slab instead); "locked": true locks every joint, no servos
     {"op": "flag", "pos"}                            -> {"ok"}
+    {"op": "push", "force", "at"?}                   -> {"ok"} (probes: a constant force, kg cm/s^2,
+        at a point of the central slab, cm from its centre in its own frame, until reset)
+    {"op": "set", "bodies": [{"p", "q", "v", "w"} x 3]} -> state (one-step probes,
+        `tars_rl.unreal.onestep`: TARS teleported to this state)
     {"op": "step", "ctrl": [4 servo targets, SI], "hud"?: str}  -> state after one control step
     {"op": "bye"}                                    -> {"ok"} and Unreal waits for a new client
 A state is {"t": s, "bodies": [{"p", "q", "v", "w"} x 3]} with v in cm/s and w in rad/s, for

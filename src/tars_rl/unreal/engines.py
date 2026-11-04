@@ -6,12 +6,17 @@
     step(ctrl, hud) -> state         apply servo targets (SI, actuator order), advance one
                                      control step (ctrl_dt), return the new BodyState
 
-Three engines, from the training physics outwards:
+Four engines, from the training physics outwards:
     mjx      MJX on the model FlagEnv trains on (plus the level's boxes): the training physics
     mujoco   CPU MuJoCo on the same model. Not identical to MJX: box-floor contacts differ (up to
              0.5 rad/s per 2 ms substep from the same state, 2026-11-03), so this is already a
              small sim-to-sim step
+    bullet   Bullet (PyBullet), hard contacts (`tars_rl.unreal.bullet`)
     unreal   Unreal's own physics (Chaos) through the bridge
+For probes (`tars_rl.unreal.probe`) the CPU engines also take `set_push(force, at)`: a constant
+force (N, world) at a point of the central slab (m, its own frame) until the next reset.
+For one-step comparisons (`tars_rl.unreal.onestep`) mujoco, bullet and unreal take
+`set_state(state) -> state`: TARS put exactly in that BodyState (poses and velocities).
 The verification loop (`tars_rl.unreal.verify`) only sees this interface, so the gaps it reports
 are the engines' gaps, not different episode loops.
 """
@@ -29,7 +34,7 @@ from tars_rl.body.spec import BodySpec
 from tars_rl.env.arena import FLAG_BODY, build_arena_mjcf
 from tars_rl.env.flag_env import ROOT_JOINT
 from tars_rl.env.levels import Level, add_to_mjcf
-from tars_rl.unreal.bodystate import BodyState, body_ids, from_mujoco
+from tars_rl.unreal.bodystate import BodyState, body_ids, from_mujoco, joint_state
 from tars_rl.unreal.bridge import (
     DEFAULT_PORT,
     BridgeClient,
@@ -37,7 +42,9 @@ from tars_rl.unreal.bridge import (
     level_to_ue,
     point_to_ue,
     state_from_ue,
+    state_to_ue,
 )
+from tars_rl.unreal.poses import qconj, qrotate
 
 
 class Engine(Protocol):
@@ -64,6 +71,7 @@ class MujocoEngine:
         check_neutral_is_zero(spec)
         self.spec, self.ctrl_dt = spec, ctrl_dt
         self.level: Level | None = None
+        self.push: tuple[np.ndarray, np.ndarray] | None = None
 
     def load(self, level: Level) -> None:
         self.level = level
@@ -84,15 +92,44 @@ class MujocoEngine:
         d.qpos[self.root_adr + 2] += self.level.ground_z(spawn_xy)
         d.ctrl[:] = 0.0
         d.mocap_pos[self.mocap] = flag
+        self.push = None
         mujoco.mj_forward(m, d)
         return from_mujoco(m, d, self.ids)
 
     def set_flag(self, pos: np.ndarray) -> None:
         self.d.mocap_pos[self.mocap] = pos
 
+    def set_push(self, force: np.ndarray, at: np.ndarray) -> None:
+        self.push = (np.asarray(force, float), np.asarray(at, float))
+
+    def set_state(self, s: BodyState) -> BodyState:
+        """One-step probes: TARS put in this state (the root from the central slab, the joints
+        from the slabs' relative poses); actuator state is MuJoCo's only memory, and it has none."""
+        m, d = self.m, self.d
+        q, qd = joint_state(self.spec, s)
+        root = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, ROOT_JOINT)
+        a, v = self.root_adr, int(m.jnt_dofadr[root])
+        d.qpos[a:a + 3], d.qpos[a + 3:a + 7] = s.pos[0], s.quat[0]
+        d.qvel[v:v + 3] = s.linvel[0]
+        d.qvel[v + 3:v + 6] = qrotate(qconj(s.quat[0]), s.angvel[0])  # a free joint's spin is local
+        for name, qi, qdi in zip(self.spec.joint_names, q, qd, strict=True):
+            j = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
+            d.qpos[m.jnt_qposadr[j]], d.qvel[m.jnt_dofadr[j]] = qi, qdi
+        d.time = s.t
+        mujoco.mj_forward(m, d)
+        return from_mujoco(m, d, self.ids)
+
     def step(self, ctrl: np.ndarray, hud: str | None = None) -> BodyState:
         self.d.ctrl[:] = ctrl
-        mujoco.mj_step(self.m, self.d, nstep=self.n_sub)
+        if self.push is None:
+            mujoco.mj_step(self.m, self.d, nstep=self.n_sub)
+        else:  # the push's lever turns with the slab: recompute it every physics step
+            c, (force, at) = self.ids[0], self.push
+            for _ in range(self.n_sub):
+                self.d.xfrc_applied[c, :3] = force
+                self.d.xfrc_applied[c, 3:] = np.cross(self.d.xmat[c].reshape(3, 3) @ at, force)
+                mujoco.mj_step(self.m, self.d)
+            self.d.xfrc_applied[c] = 0.0
         return from_mujoco(self.m, self.d, self.ids)
 
     def close(self) -> None:
@@ -150,6 +187,13 @@ class UnrealEngine:
 
     def set_flag(self, pos: np.ndarray) -> None:
         self.client.request({"op": "flag", "pos": point_to_ue(pos)})
+
+    def set_push(self, force: np.ndarray, at: np.ndarray) -> None:
+        # The slab's own frame mirrors like the world's (A73): flip y, metres -> cm.
+        self.client.request({"op": "push", "force": point_to_ue(force), "at": point_to_ue(at)})
+
+    def set_state(self, s: BodyState) -> BodyState:
+        return state_from_ue(self.client.request({"op": "set", **state_to_ue(s)}))
 
     def step(self, ctrl: np.ndarray, hud: str | None = None) -> BodyState:
         msg: dict = {"op": "step", "ctrl": [float(c) for c in ctrl]}

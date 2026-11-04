@@ -93,3 +93,45 @@ def test_scoring_on_randomized_bodies_gives_each_episode_its_own_physics(env):
     assert np.allclose(nominal["final_dist"], run_episodes(env, push, rng, N)["final_dist"])
     gap = np.abs(randomized["final_dist"] - nominal["final_dist"])
     assert gap.max() > 1e-4, "randomized episodes moved exactly like nominal ones"
+
+
+@pytest.fixture(scope="module")
+def elliptic_env():
+    return FlagEnv(config=EnvConfig(episode_seconds=2.0, friction_cone="elliptic"))
+
+
+def test_friction_hardness_is_drawn_per_env_and_leaves_the_rest_alone(env, sampled, elliptic_env):
+    keys = jax.random.split(jax.random.PRNGKey(0), N)
+    cfg = DomainRandConfig(impratio=(1.0, 10.0))
+    model_v, in_axes = for_env(elliptic_env, cfg)(elliptic_env.mjx_model, keys)
+    imp = np.asarray(model_v.opt.impratio)
+    assert imp.shape == (N,) and imp.min() >= 1.0 and imp.max() <= 10.0
+    assert len(set(np.round(imp, 6))) == N, "every env draws its own"
+    assert in_axes.opt.impratio == 0
+    plain, _ = sampled
+    for f in ("geom_friction", "body_mass", "actuator_gainprm", "body_ipos"):
+        assert np.array_equal(np.asarray(getattr(model_v, f)), np.asarray(getattr(plain, f))), \
+            f"{f}: adding friction hardness changed the other draws"
+
+
+def test_friction_hardness_needs_the_elliptic_cone(env):
+    keys = jax.random.split(jax.random.PRNGKey(0), 2)
+    with pytest.raises(ValueError, match="elliptic"):
+        for_env(env, DomainRandConfig(impratio=(1.0, 10.0)))(env.mjx_model, keys)
+
+
+def test_tars_stands_on_the_hardest_and_softest_friction(elliptic_env):
+    e = elliptic_env
+    zero = jnp.zeros(e.action_size)
+    for imp in (1.0, 10.0):
+        model = e.mjx_model.tree_replace({"opt.impratio": jnp.asarray(imp)})
+        old, e.mjx_model = e.mjx_model, model
+        try:
+            def stand(k):
+                return jax.lax.fori_loop(0, e.config.max_steps,
+                                         lambda _, x: e.step(x, zero), e.reset(k))
+
+            s = jax.jit(stand)(jax.random.PRNGKey(1))
+        finally:
+            e.mjx_model = old
+        assert not bool(s.fell) and float(e._cos_tilt(s.data)) > 0.999, f"impratio {imp}"

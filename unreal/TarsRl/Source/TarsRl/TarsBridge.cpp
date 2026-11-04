@@ -1,6 +1,7 @@
 #include "TarsBridge.h"
 
 #include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Common/TcpSocketBuilder.h"
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
@@ -44,6 +45,15 @@ bool ReadVec(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, FVector& Out)
 	return true;
 }
 
+bool ReadQuat(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, FQuat& Out)
+{
+	const TArray<TSharedPtr<FJsonValue>>* A = nullptr;
+	if (!O->TryGetArrayField(Key, A) || A->Num() != 4) return false;
+	Out = FQuat((*A)[0]->AsNumber(), (*A)[1]->AsNumber(), (*A)[2]->AsNumber(), (*A)[3]->AsNumber());
+	Out.Normalize();
+	return true;
+}
+
 }  // namespace
 
 ATarsBridge::ATarsBridge()
@@ -71,6 +81,9 @@ void ATarsBridge::BeginPlay()
 	P.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	Level = GetWorld()->SpawnActor<ATarsLevel>(Origin, FRotator::ZeroRotator, P);
 	Camera = GetWorld()->SpawnActor<ACameraActor>(Origin + FVector(-150, 150, 90), FRotator::ZeroRotator, P);
+	FString CameraMode;
+	bTopCamera = FParse::Value(FCommandLine::Get(), TEXT("TarsCamera="), CameraMode) && CameraMode == TEXT("top");
+	if (bTopCamera) Camera->GetCameraComponent()->SetFieldOfView(55.f);  // TARS stays big from up there
 	if (APlayerController* PC = GetWorld()->GetFirstPlayerController()) PC->SetViewTarget(Camera);
 }
 
@@ -211,6 +224,9 @@ bool ATarsBridge::Handle(const TSharedPtr<FJsonObject>& Cmd)
 		Tars = GetWorld()->SpawnActorDeferred<ATarsActor>(ATarsActor::StaticClass(), Where, nullptr, nullptr,
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		Tars->bScripted = false;
+		Cmd->TryGetBoolField(TEXT("solo"), Tars->bSolo);  // contact probes only
+		Cmd->TryGetBoolField(TEXT("locked"), Tars->bLocked);
+		Cmd->TryGetBoolField(TEXT("solo_arm"), Tars->bSoloArm);
 		Tars->FinishSpawning(Where);
 		if (!Tars->IsReady())
 		{
@@ -220,6 +236,7 @@ bool ATarsBridge::Handle(const TSharedPtr<FJsonObject>& Cmd)
 		BodyHeightCm = Tars->BodyHeightCm();
 		Level->SetFlag(Flag, BodyHeightCm);
 		EpisodeTime = 0;
+		bSnapCamera = true;
 		Send(StateMessage(0.f));
 	}
 	else if (Op == TEXT("flag"))
@@ -232,6 +249,43 @@ bool ATarsBridge::Handle(const TSharedPtr<FJsonObject>& Cmd)
 		}
 		Level->SetFlag(Pos, BodyHeightCm);
 		Send(Ok);
+	}
+	else if (Op == TEXT("push"))
+	{
+		FVector Force, At = FVector::ZeroVector;
+		if (!Tars || !ReadVec(Cmd, TEXT("force"), Force))
+		{
+			SendError(Tars ? TEXT("push needs force, 3 numbers") : TEXT("push before reset"));
+			return false;
+		}
+		ReadVec(Cmd, TEXT("at"), At);  // optional: the central slab's centre by default
+		Tars->SetPush(Force, At);
+		Send(Ok);
+	}
+	else if (Op == TEXT("set"))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Bodies = nullptr;
+		if (!Tars || Tars->bSolo || !Cmd->TryGetArrayField(TEXT("bodies"), Bodies) || Bodies->Num() != 3)
+		{
+			SendError(Tars ? TEXT("set needs bodies: 3 of {p, q, v, w}, jointed TARS") : TEXT("set before reset"));
+			return false;
+		}
+		TArray<FTarsSlabState> In;
+		for (const TSharedPtr<FJsonValue>& V : *Bodies)
+		{
+			const TSharedPtr<FJsonObject> B = V->AsObject();
+			FTarsSlabState S;
+			if (!B || !ReadVec(B, TEXT("p"), S.Pos) || !ReadQuat(B, TEXT("q"), S.Rot) || !ReadVec(B, TEXT("v"), S.Vel)
+				|| !ReadVec(B, TEXT("w"), S.AngVel))
+			{
+				SendError(TEXT("set: each body needs p, v, w (3 numbers) and q (4)"));
+				return false;
+			}
+			S.Pos += Origin;
+			In.Add(S);
+		}
+		Tars->WriteSlabs(In);
+		Send(StateMessage(0.f));
 	}
 	else if (Op == TEXT("step"))
 	{
@@ -265,8 +319,11 @@ void ATarsBridge::FollowCamera(float DeltaSeconds)
 	if (PC && PC->GetViewTarget() != Camera) PC->SetViewTarget(Camera);
 	if (!Tars) return;
 	const FVector Target = Tars->CentralLocation();
-	const FVector Want = Target + FVector(-160, 160, 100);  // behind-left of TARS's start heading
-	const float A = FMath::Clamp(DeltaSeconds * 2.f, 0.f, 1.f);
+	const FVector Want = Target + (bTopCamera
+		? FVector(-80, 0, 320)  // above and a little behind: clears the walls, sees the room
+		: FVector(-160, 160, 100));  // behind-left of TARS's start heading
+	const float A = bSnapCamera ? 1.f : FMath::Clamp(DeltaSeconds * 2.f, 0.f, 1.f);
+	bSnapCamera = false;
 	Camera->SetActorLocation(FMath::Lerp(Camera->GetActorLocation(), Want, A));
 	Camera->SetActorRotation((Target - Camera->GetActorLocation()).Rotation());
 }

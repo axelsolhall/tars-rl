@@ -56,16 +56,34 @@ Setup once: `uv sync`; Unreal Engine 5.5 for Linux on the GPU box in `~/UnrealEn
 `scripts/unreal.sh sequence` (window) or `scripts/unreal.sh sequence-fast` (headless, ~40 s)
 instead of the Xcode route below.
 
-Status 2026-11-04 (UE 5.5.4, box): builds clean. Four fixes on the first run:
+Status 2026-11-04 (UE 5.5.4, box): builds clean (18 s). Fixes from the first day:
 - **Floor:** the floor search hit the spectator pawn, so TARS dropped 1.2 m.
-- **Hinge drive arguments:** twist/swing were swapped.
-- **Joint drives:** Chaos's drives replaced by MuJoCo's servo, computed per 2 ms step (see `TarsActor.h`).
-- **Floor contact:** the floor now has no bounce and adds no friction of its own.
+- **Joint drives:** Chaos's drives replaced by MuJoCo's servo, computed in C++ before every 2 ms
+  physics step (one engine frame per step, no substeps; see `TarsActor.h`). Chaos's drives hit
+  0.6 rad in 20 ms where MuJoCo's servo takes 0.5 s. Signs (A74) are both +1.
+- **Contacts:** no bounce, the floor adds no friction of its own, sharp box edges (collision
+  margin 0), and no inertia conditioning on the slabs (it made a lone slab tip at the wrong
+  force, by up to 2.6x).
+- **One joint per arm:** each arm hung on a hinge constraint, a carriage body, then a slide
+  constraint. Chaos's iterative joint solver made that chain soft: with a 10 g carriage TARS slid
+  at ~8 N where MuJoCo and Bullet hold ~20 N and every policy fell; a 100 g carriage got close but
+  kept free fall, drag and airborne spin a few percent off. Now one constraint per arm holds both
+  joints (twist = hinge, linear z = slide), as MuJoCo puts both in the arm's one body. Its order
+  matters: central first, or Chaos measures the slide along the central slab instead of the arm.
+- **Friction iterations:** Chaos applies friction in only the first 4 of its 8 position
+  iterations. With that, the arms' feet slid back 2 cm while both hinges swung, where MuJoCo and
+  Bullet hold them, and TARS fell over backwards within 2 s. `DefaultEngine.ini` now sets
+  `p.Chaos.Solver.Collision.PositionFrictionIterations=8`. Shock propagation, static-friction
+  stiffness and velocity friction iterations changed nothing.
+- `scripts/unreal.sh fast` no longer reports ready off an old log.
 
-Results:
-- **In free fall** (no contact): the two engines match within about 1 %. The scratchpad `airborne.py` check lives outside the repo for now.
-- **The sequence on the floor:** Unreal tips over at 10.8 s, while MuJoCo stands for 32 s. This is ground contact: MuJoCo with
-  `cone="elliptic" impratio="10" noslip_iterations="10"` tips the same way.
+Where it stands: Unreal now agrees with MuJoCo and Bullet on every probe
+(`tars_rl.unreal.probe`, below), and one 20 ms step at a time it moves TARS like Bullet does
+(`tars_rl.unreal.onestep`, below). The scripted sequence stands all 32 s. Its hinges track the
+targets worse than MuJoCo's (corr ~0.5 vs 0.9), and Bullet's do too: MuJoCo's soft floor lets an
+arm's foot press in and turn, the hard ones stall it. Tried without effect (before the carriage
+fix): friction (also `p.CollisionFriction`), solver iterations up to 64/32, projection,
+constraint priorities, stabilizers, a 10 m floor, corner-sphere contacts.
 
 1. **Export the data Unreal reads** (only after a body or sequence change; tests fail if stale):
    `uv run python -m tars_rl.unreal.export` → `unreal/TarsRl/Content/TarsData/{body_spec,sequence}.json`.
@@ -85,9 +103,113 @@ Results:
    - Your call: are the gaps small enough that a MuJoCo-trained policy is worth trying in Unreal?
 4. **Checks.** `uv run ruff check .` and `uv run pytest tests/unreal -q`.
 
+## Engine probes and Bullet (`tars_rl.unreal.probe`, `tars_rl.unreal.bullet`)
+
+Small experiments run identically in each engine, next to rigid-body mechanics' answer. They say
+which part of an engine's TARS differs before any policy runs in it. Bullet (PyBullet) is a
+third engine for sim-to-sim: the `sim2sim` extra, Linux only (it does not build on macOS 26).
+
+0. **Tests:** `uv run pytest tests/unreal/test_probe.py -q` (Mac: the Bullet ones skip). Box:
+   `uv run --extra sim2sim pytest tests/unreal/test_probe.py -q`.
+1. **Probes:** `scripts/unreal.sh fast 1`, then
+   `uv run --extra sim2sim python -m tars_rl.unreal.probe --engines mujoco bullet unreal`.
+   2026-11-04, Unreal with one joint per arm and friction in all iterations (with the 10 g
+   carriage and Chaos's default friction iterations, in brackets):
+
+   | probe | MuJoCo | Bullet | Unreal | rigid |
+   |---|---|---|---|---|
+   | free fall, hinge at 0.04 / 0.10 s (rad) | 0.233 / 0.495 | 0.233 / 0.495 | 0.233 / 0.495 (- / 0.496) | |
+   | slide at 0.5 s (mm) | 38.1 | 38.1 | 38.1 (38.1) | |
+   | both hinges to 0.5: tilt at 0.18 s / max (deg) | 8.2 / 8.4 | 8.7 / 9.0 | 8.9 / 8.9 (- / 89.7) | |
+   | the same: tilt at 2 s (deg) / moved (mm) | 0.2 / +41 | 0.0 / +33 | 0.0 / +36 (fell) | |
+   | push 1 cm up: moves from (N) | 17.5 | 20.0 | 17.5 (7.5) | 23.5 |
+   | push at centre: tips from (N) | 7.5 | 7.5 | 7.5 (5.5) | 7.4 |
+   | 30 N at the feet for 0.3 s: slid (mm) / max tilt (deg) | 105 / 5.4 | 104 / 4.4 | 104 / 6.6 | 97 / |
+   | sequence: fell at | never | never | never (10.8 s) | |
+
+   - With a 100 g carriage and Chaos's default 4 friction iterations, the hinge swing still fell,
+     slowly: past 30 deg at 1 s, after the old 0.5 s window. The probe now runs it 2 s.
+   - Velocity-only friction (`PositionFrictionIterations 0`) scores policies higher but is wrong:
+     TARS slides from 5 N and the drag tips it 59 deg.
+   - Bullet yaws 14.5 deg in the hinge swing and Unreal 5.8 deg; MuJoCo stays at 0. Both are
+     iterative solvers working through the left and right arm in turn.
+
+1b. **One step at a time (`tars_rl.unreal.onestep`):** a policy walks in CPU MuJoCo; each engine
+   is put in each of MuJoCo's states and steps once with the policy's action. Errors are grouped
+   by the slabs on the floor. Whole episodes can't show this: they drift apart within a second.
+   `uv run --extra sim2sim python -m tars_rl.unreal.onestep --policy runs/chain-dr/transformer
+   --engines bullet unreal` (Unreal: `scripts/unreal.sh fast 1`). Tests:
+   `tests/unreal/test_onestep.py`. 2026-11-04, 2000 steps, mean error after 20 ms:
+
+   | slabs down (steps) | Bullet: v cm/s / spin deg/s / hinge deg/s | Unreal: the same |
+   |---|---|---|
+   | all (2000) | 4.1 / 18.9 / 15.9 | 4.2 / 22.5 / 16.9 |
+   | both arms (634) | 1.8 / 12.1 / 8.0 | 1.7 / 15.6 / 9.2 |
+   | central only (430) | 5.3 / 13.9 / 4.7 | 5.3 / 15.7 / 5.6 |
+   | in the air (106) | 0.06 / 0.4 / 0.9 | 0.2 / 4.9 / 1.2 |
+   | landing or lifting (785) | 5.9 / 29.1 / 30.0 | 6.1 / 32.8 / 30.9 |
+
+   - Step by step, Unreal is now as close to MuJoCo as Bullet is. Both differ from MuJoCo most
+     where contacts change (soft vs hard contact).
+   - MuJoCo rests TARS ~1 mm into the floor; the tool lifts that out before handing a state to a
+     hard-contact engine. Without the lift Unreal popped the slab out each step and looked twice
+     as wrong as Bullet with the central slab down: an artifact of the tool, not of Unreal.
+   - Yet whole episodes still score lower in Unreal than in Bullet (below). One teleport per step
+     wipes what Chaos carries between steps: contact manifolds and static-friction anchors, which
+     pull a slipped foot back to where it first stuck. Turning off friction restore
+     (`p.Chaos.Collision.Manifold.EnableFrictionRestore 0`) lifted the chain-dr transformer from
+     2.47 to 2.78 flags on the flat floor (32 episodes, before the one-joint change). That is
+     the lead for the rest of the gap. Decided 2026-11-04: friction restore stays on (Unreal
+     strict, not wrong; off, TARS drifts 0.5 mm in 2 s standing still).
+
+2. **Policies in Bullet:** `uv run --extra sim2sim python -m tars_rl.unreal.verify --policy <run>
+   --level <level> --engines mujoco bullet`. 2026-11-04, chain-dr transformer, 32 episodes
+   (flags per episode / falls):
+
+   | engine | flat | bumpy | steps | slopes | obstacles | apartment |
+   |---|---|---|---|---|---|---|
+   | MuJoCo | 4.47 / 0 % | 0.09 / 69 % | 2.09 / 34 % | 1.41 / 16 % | 4.44 / 0 % | 2.12 / 41 % |
+   | Bullet | 3.88 / 0 % | 0.03 / 44 % | 1.59 / 22 % | 1.09 / 12 % | 3.97 / 0 % | 1.53 / 44 % |
+
+   - Your call: is Bullet the stage-4 gate until Unreal's contact is fixed?
+3. **Friction hardness (`train.run --contact-dr`):** elliptic friction cone, impratio
+   log-uniform 1-10 per env.
+   - Why: MuJoCo's default friction creeps 0.17 cm/s under a 10 N push that Bullet and Unreal
+     hold still; impratio 10 creeps 0.02 cm/s.
+   - Cost: about 2x the physics on CPU; 1.35x the training time on the 5080 (2.3 h for 200M).
+   - Tests: `uv run pytest tests/env/test_randomize.py -q`.
+   - A/B 2026-11-04, flat floor, transformer: `runs/contact/transformer` against
+     `runs/chain-dr/transformer` (flags / falls %). MJX flat 4.25/1.2 (4.30/0), randomized bodies
+     3.69/3.1 (3.80/3.9). Levels, 32 episodes, MuJoCo · Bullet · Unreal:
+     flat 3.97/0 · 3.81/0 · 2.38/22 (4.47/0 · 3.88/0 · 2.78/6);
+     steps 1.88/44 · 2.00/28 · 1.31/31 (2.09/34 · 1.59/22 · 1.66/28);
+     obstacles 4.66/0 · 4.16/0 · 2.31/16 (4.44/0 · 3.97/0 · 3.03/0);
+     apartment 1.47/66 · 1.19/62 · 1.75/28 (2.12/41 · 1.53/44 · 1.41/50).
+   - So: MuJoCo to Bullet loses 4 % of the flags on the flat floor instead of 13 % (a smaller
+     sim-to-sim gap), but this flat-floor transformer is no better in Bullet or Unreal.
+   - Stage-3 A/B the same day, gru on terrain + randomized bodies, seed 0:
+     `runs/stage3b/gru-contact` against `runs/stage3/gru` (2.0 h vs 1.2 h to train). MJX flat
+     3.56/1.2 (3.76/0), randomized bodies 2.92/2.0 (3.05/2.0), rough ground 1.64/23 (1.59/29;
+     rough third 0.48/37 vs 0.36/44). Levels, MuJoCo · Bullet · Unreal:
+     flat 3.84/0 · 3.72/0 · 3.16/0 (3.66/0 · 3.19/3 · 2.22/25);
+     steps 2.16/22 · 2.03/6 · 1.62/12 (2.22/16 · 1.72/6 · 1.28/28);
+     slopes 1.75/19 · 1.88/9 · 1.56/19 (1.81/28 · 1.38/12 · 1.06/34);
+     obstacles 3.44/3 · 3.88/0 · 3.34/3 (4.06/3 · 3.41/0 · 2.50/25);
+     apartment 3.62/12 · 3.03/16 · 1.94/38 (3.50/19 · 2.59/19 · 1.25/62).
+   - So: better in Bullet and Unreal on every level, and Unreal's falls on the flat floor go from
+     25 % to 0.
+   - Seed control, `runs/stage3b/gru-seed1` (no contact-dr, seed 1), Unreal falls %: flat 19,
+     steps 19, slopes 28, obstacles 16, apartment 25 (seed 0: 25, 28, 34, 25, 62; contact-dr: 0,
+     12, 19, 3, 38). Contact-dr falls less than either plain seed on four levels; the apartment
+     varies too much by seed (25-62 %) to say. Bullet flags flat 3.28, obstacles 3.19, apartment
+     2.53, below contact-dr's 3.72, 3.88, 3.03.
+   - Decided 2026-11-04: contact-dr stays in the recipe (transfer first, training time no
+     concern).
+
 ## Rough-ground training (`tars_rl.env.terrain`, roadmap stage 3)
 
-Built 2026-11-03, not trained yet. One 80 m heightfield, flat at one end and rough at the other
+Built 2026-11-03; first run 2026-11-04 (`runs/stage3/transformer`, transformer, terrain + body
+randomization, 200M steps, 2.0 h on the 5080; MJX terrain costs 1.9x the flat floor). One 80 m heightfield, flat at one end and rough at the other
 (tiles, thresholds, rugs, mounds); every training env starts on its own flat pad of it, turned its
 own way. Train with `uv run python -m tars_rl.train.run --profile full --terrain --out <run>`.
 
@@ -104,7 +226,24 @@ own way. Train with `uv run python -m tars_rl.train.run --profile full --terrain
    --terrain --domain-rand --episodes 256`.
    - Adds a table by difficulty. 2026-11-03, 48 episodes on the Mac: easy 3.14 flags/0 % falls,
      medium 0.56/31 %, rough 0.00/11 % (stuck, not falling).
-3. **After terrain training:** the same eval on the new run.
+3. **After terrain training:** the same eval on the new run. 2026-11-04, transformer (flags per
+   episode / falls; flat-trained `runs/chain-dr/transformer` after the arrow):
+   - rough ground: easy 2.73 / 4 % (2.84 / 5 %), medium 1.44 / 28 % (0.41 / 18 %), rough
+     0.42 / 49 % (0.02 / 10 %, stuck rather than falling);
+   - flat floor 3.37 / 0.8 % (4.30 / 0 %), randomized bodies 2.86 / 5.9 % (3.80 / 3.9 %);
+   - levels, 32 episodes, MuJoCo | Bullet: apartment 2.97 / 22 % | 2.62 / 3 % (2.12 / 41 % |
+     1.53 / 44 %), bumpy 0.31 / 59 % | 0.16 / 38 % (0.09 / 69 % | 0.03 / 44 %), steps 1.81 / 31 %
+     | 1.53 / 16 % (2.09 / 34 % | 1.59 / 22 %), slopes 1.44 / 25 % | 1.53 / 16 % (1.41 / 16 % |
+     1.09 / 12 %);
+   - so: much more robust where the apartment is concerned, ~22 % slower on the flat floor.
+   - gru, the same recipe (`runs/stage3/gru`, 200M steps in 1.2 h): rough ground easy 3.09 / 5 %,
+     medium 1.58 / 33 %, rough 0.36 / 44 % (all bands 1.59 / 29 % vs the transformer's
+     1.46 / 28 %); flat floor 3.76 / 0 %, randomized bodies 3.05 / 2.0 %; levels in CPU MuJoCo
+     apartment 3.50 / 19 %, steps 2.22 / 16 %, slopes 1.81 / 28 %, bumpy 0.22 / 56 %. It matches
+     or beats the transformer almost everywhere, in 60 % of the time. Your call: which network is
+     the standard for stage 3?
+   - Scoring fix the same day: `train.eval` without `--terrain` kept a terrain run's own terrain,
+     so its "flat" score was a rough-ground one (`tests/train/test_eval_env.py`).
    - Your call: does the rough third improve without losing the flat floor?
    - Then the held-out test levels: `uv run python -m tars_rl.unreal.verify --policy <run>
      --level bumpy|steps|slopes --engines mjx mujoco`.
@@ -116,23 +255,36 @@ own way. Train with `uv run python -m tars_rl.train.run --profile full --terrain
 Setup once (box): Unreal 5.5.4 for Linux unzipped to `~/UnrealEngine` (~60 GB), then
 `scripts/unreal.sh build` (18 s; the engine ships prebuilt).
 
-2026-11-04, flat, 16 episodes, flags per episode / falls:
+2026-11-04 end of day, 32 episodes per level, flags per episode / falls %, MuJoCo · Bullet ·
+Unreal (all Unreal fixes above; `runs/sim2sim/levels/`, older Unreal sweeps in its
+`before-*` folders):
 
-| policy | MuJoCo | Unreal |
-|---|---|---|
-| chain-dr transformer | 4.62 / 0 % | 0.19 / 38 % |
-| gru | 4.19 / 0 % | 0.00 / 88 % |
-| default | 4.00 / 0 % | 0.06 / 88 % |
+| policy | flat | steps | slopes | obstacles | apartment |
+|---|---|---|---|---|---|
+| chain-dr transformer | 4.47/0 · 3.88/0 · 2.78/6 | 2.09/34 · 1.59/22 · 1.66/28 | 1.41/16 · 1.09/12 · 1.00/19 | 4.44/0 · 3.97/0 · 3.03/0 | 2.12/41 · 1.53/44 · 1.41/50 |
+| chain-dr gru | 4.12/0 · 3.38/3 · 2.41/41 | 2.03/38 · 1.66/25 · 1.50/34 | 1.50/38 · 1.19/38 · 0.94/28 | 4.75/0 · 3.69/3 · 2.38/31 | 1.66/50 · 1.44/34 · 1.19/72 |
+| chain-dr default | 3.97/0 · 3.41/3 · 1.34/47 | 1.75/16 · 1.94/22 · 1.16/44 | 1.19/25 · 1.12/19 · 0.31/47 | 4.28/0 · 3.62/3 · 1.66/59 | 1.62/59 · 1.75/47 · 1.22/75 |
+| stage3 transformer | 3.56/0 · 2.94/0 · 2.28/9 | 1.81/31 · 1.53/16 · 1.25/19 | 1.44/25 · 1.53/16 · 1.34/16 | 3.69/3 · 2.97/0 · 2.34/6 | 2.97/22 · 2.62/3 · 1.47/22 |
+| stage3 gru | 3.66/0 · 3.19/3 · 2.22/25 | 2.22/16 · 1.72/6 · 1.28/28 | 1.81/28 · 1.38/12 · 1.06/34 | 4.06/3 · 3.41/0 · 2.50/25 | 3.50/19 · 2.59/19 · 1.25/62 |
+| contact-dr transformer (flat) | 3.97/0 · 3.81/0 · 2.38/22 | 1.88/44 · 2.00/28 · 1.31/31 | 1.00/28 · 1.06/16 · 0.72/28 | 4.66/0 · 4.16/0 · 2.31/16 | 1.47/66 · 1.19/62 · 1.75/28 |
+| stage3b gru-contact | 3.84/0 · 3.72/0 · 3.16/0 | 2.16/22 · 2.03/6 · 1.62/12 | 1.75/19 · 1.88/9 · 1.56/19 | 3.44/3 · 3.88/0 · 3.34/3 | 3.62/12 · 3.03/16 · 1.94/38 |
 
-The gap is ground contact (see T10). In CPU MuJoCo, the transformer scores 0 flags with 100 % falls, as in Unreal, under one combination: elliptic cone + `impratio 10` + no-slip, with or without stiff contacts.
+(bumpy: every policy under 0.35 flags in every engine.)
 
-It keeps 3.8-4.2 flags with no falls under each of these:
-- stiff contacts (`solref 0.004`);
-- elliptic + `impratio 10`;
-- elliptic + no-slip;
-- no-slip alone.
-
-`impratio 10` + no-slip on the pyramidal cone is untested. TARS stands still in every variant, so none of them is unstable at rest.
+- Bullet walks every policy at ~80-90 % of MuJoCo's flags, with few falls. Unreal walks the
+  transformers at ~60-80 %, but the gru and default policies fall 25-75 % of the time there.
+- Unreal now agrees with MuJoCo and Bullet on every probe, and one step at a time it is as close
+  to MuJoCo as Bullet (Engine probes, 1b). What remains is state Chaos carries between steps
+  (friction anchors; see 1b). Friction restore off: transformer flat 3.09/6, gru 2.66/28.
+- The gru trained on terrain with friction hardness (`--contact-dr`, Engine probes 3) is the
+  first policy that walks in Unreal at ~85 % of Bullet without falling on the flat floor.
+- Decided 2026-11-04: trained in MuJoCo, evaluated in both Unreal and Bullet. The gate is that it
+  works there: falls are the failure signal; flags per episode show the training transfers.
+  No pass threshold is set in advance.
+- Earlier today I put the gap on MuJoCo's soft contacts: a MuJoCo run with
+  `cone="elliptic" impratio="10" noslip_iterations="10"` failed like Unreal. That was MuJoCo's
+  20-iteration solver going erratic. With 100 iterations, hard MuJoCo contacts walk fine (3.7-4.2
+  flags).
 
 0. **Without Unreal** (any machine): `uv run pytest tests/env/test_levels.py tests/unreal -q`.
    A stand-in speaking the bridge protocol (MuJoCo behind it) must reproduce MuJoCo exactly;

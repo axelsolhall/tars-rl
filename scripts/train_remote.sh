@@ -66,7 +66,7 @@ if pgrep -f -- "python -m tars_rl\..* --out runs/$name\$" > /dev/null; then
   echo "runs/$name is already running" >&2
   exit 1
 fi
-uv sync --extra cuda
+uv sync --extra cuda --extra sim2sim
 mkdir -p "runs/$name"
 nohup uv run python -m "$@" >> "runs/$name/train.log" 2>&1 < /dev/null &
 echo "started runs/$name (pid $!) with ${free} MiB GPU free"

@@ -47,10 +47,16 @@ class EnvConfig:
     history_steps: int = 0
     # Rough ground (stage 3, `tars_rl.env.terrain`): None = the flat floor.
     terrain: TerrainConfig | None = None
+    # MuJoCo's friction cone. "elliptic" lets `DomainRandConfig.impratio` harden friction per env
+    # (2026-11-04: pyramidal friction creeps 0.17 cm/s under a 10 N push that Bullet holds still).
+    friction_cone: str = "pyramidal"
 
     def __post_init__(self) -> None:
         if self.flags not in FLAG_MODES:
             raise ValueError(f"flags must be one of {FLAG_MODES}, got {self.flags!r}")
+        if self.friction_cone not in ("pyramidal", "elliptic"):
+            raise ValueError(
+                f"friction_cone must be pyramidal or elliptic, got {self.friction_cone!r}")
 
     @property
     def max_steps(self) -> int:

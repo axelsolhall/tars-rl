@@ -18,6 +18,9 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = ["jax[cuda12]>=0.4.30"]
+# Bullet, the third engine for sim-to-sim (tars_rl.unreal.bullet). Linux only: it does not build
+# on macOS 26, where the Bullet tests skip.
+sim2sim = ["pybullet>=3.2.6; sys_platform == 'linux'"]
 
 [dependency-groups]
 dev = [

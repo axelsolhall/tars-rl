@@ -8,10 +8,13 @@ Run (Unreal started with scripts/unreal.sh, see VERIFY.md):
 One episode loop drives either engine (`tars_rl.unreal.engines`) with FlagEnv's rules: the
 policy's observation window, the servo speed cap, chain flags drawn by FlagEnv's own sampler
 from the same keys as `tars_rl.train.eval`, tags, falls and the reward. On the flat level the
-mjx column is the training physics, so it should match `train.eval`'s numbers; mujoco (CPU)
-and unreal next to it are the sim-to-sim gaps (roadmap stage 4). Other levels add the boxes
-of `tars_rl.env.levels` to both engines; flags there are redrawn until the straight walk to
-them is clear of furniture (the blind policy leaves routing to the decider).
+mjx column is the training physics, so it should match `train.eval`'s numbers; mujoco (CPU),
+bullet and unreal next to it are the sim-to-sim gaps (roadmap stage 4). bullet needs PyBullet,
+the `sim2sim` extra (Linux only):
+    uv run --extra sim2sim python -m tars_rl.unreal.verify ... --engines mujoco bullet
+Other levels add the boxes of `tars_rl.env.levels` to every engine; flags there are redrawn
+until the straight walk to them is clear of furniture (the blind policy leaves routing to the
+decider).
 
 --realtime paces every step to the wall clock so you can watch; without it Unreal runs as fast
 as it can step (lockstep, no frame waits; add -nullrhi for no rendering at all).
@@ -242,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--level", default="flat", choices=sorted(LEVELS))
     p.add_argument("--level-seed", type=int, default=0)
     p.add_argument("--engines", nargs="+", default=["mjx", "mujoco", "unreal"],
-                   choices=["mjx", "mujoco", "unreal"],
+                   choices=["mjx", "mujoco", "bullet", "unreal"],
                    help="mjx = the training physics; gaps print against the first engine")
     p.add_argument("--episodes", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
@@ -265,6 +268,10 @@ def main(argv: list[str] | None = None) -> int:
         if name in ("mjx", "mujoco"):
             cls = MjxEngine if name == "mjx" else MujocoEngine
             make, workers = (lambda w, cls=cls: cls(env.spec, env.dt)), 1
+        elif name == "bullet":
+            from tars_rl.unreal.bullet import BulletEngine
+
+            make, workers = (lambda w: BulletEngine(env.spec, env.dt)), 1
         else:
             make, workers = (lambda w: UnrealEngine(env.spec, env.dt, a.host, a.ports[w])), len(
                 a.ports)

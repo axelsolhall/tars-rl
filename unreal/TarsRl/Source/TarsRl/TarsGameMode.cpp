@@ -14,6 +14,7 @@
 #include "Misc/Parse.h"
 #include "Engine/Engine.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
+#include "PhysicsEngine/PhysicsSettings.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTarsGameMode, Log, All);
 
@@ -25,6 +26,10 @@ ATarsGameMode::ATarsGameMode()
 void ATarsGameMode::StartPlay()
 {
 	Super::StartPlay();
+	const FChaosSolverConfiguration& Solver = UPhysicsSettings::Get()->SolverOptions;
+	UE_LOG(LogTarsGameMode, Log, TEXT("Chaos solver: %d position / %d velocity / %d projection iterations, collision margin %.3f (max %.2f cm)"),
+		Solver.PositionIterations, Solver.VelocityIterations, Solver.ProjectionIterations,
+		Solver.CollisionMarginFraction, Solver.CollisionMarginMax);
 	FString Mode = TEXT("bridge");
 	FParse::Value(FCommandLine::Get(), TEXT("TarsMode="), Mode);
 	const double FloorZ = FindOrMakeFloor();
