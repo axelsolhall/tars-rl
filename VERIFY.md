@@ -53,7 +53,19 @@ Setup once: `uv sync`. Needs T3's `tars_rl.body` on the branch.
 
 Setup once: `uv sync`; Unreal Engine 5.5 for Linux on the GPU box in `~/UnrealEngine`, then
 `scripts/unreal.sh build` (2026-11-03: moved from the Mac to the box). On the box, step 2 is
-`scripts/unreal.sh sequence` instead of the Xcode route below.
+`scripts/unreal.sh sequence` (window) or `scripts/unreal.sh sequence-fast` (headless, ~40 s)
+instead of the Xcode route below.
+
+Status 2026-11-04 (UE 5.5.4, box): builds clean. Four fixes on the first run:
+- **Floor:** the floor search hit the spectator pawn, so TARS dropped 1.2 m.
+- **Hinge drive arguments:** twist/swing were swapped.
+- **Joint drives:** Chaos's drives replaced by MuJoCo's servo, computed per 2 ms step (see `TarsActor.h`).
+- **Floor contact:** the floor now has no bounce and adds no friction of its own.
+
+Results:
+- **In free fall** (no contact): the two engines match within about 1 %. The scratchpad `airborne.py` check lives outside the repo for now.
+- **The sequence on the floor:** Unreal tips over at 10.8 s, while MuJoCo stands for 32 s. This is ground contact: MuJoCo with
+  `cone="elliptic" impratio="10" noslip_iterations="10"` tips the same way.
 
 1. **Export the data Unreal reads** (only after a body or sequence change; tests fail if stale):
    `uv run python -m tars_rl.unreal.export` → `unreal/TarsRl/Content/TarsData/{body_spec,sequence}.json`.
@@ -61,22 +73,66 @@ Setup once: `uv sync`; Unreal Engine 5.5 for Linux on the GPU box in `~/UnrealEn
    then double-click the `.uproject` and accept "rebuild modules". Press **Play**.
    - Check: TARS (3 grey slabs) stands still for 10 s, then swings and slides its arms
      through the sequence. The top-left line shows `t`, tilt and `standing` / `fell at`.
-   - Nothing is replayed: `TarsActor` only sets joint drive targets each tick.
+   - Nothing is replayed: `TarsActor` applies MuJoCo's servo forces before every 2 ms step.
    - At 32 s the screen shows `Recorded …/Saved/TarsRuns/unreal_poses.csv` (also on Stop).
 3. **Compare to MuJoCo.**
    `uv run python -m tars_rl.unreal.eval --unreal unreal/TarsRl/Saved/TarsRuns/unreal_poses.csv --out runs/unreal`
    - Prints stand time and per-joint tracking (mean/max error, corr) for both engines, and the
      max/mean position (cm) and rotation (deg) gap per body.
    - Baseline: `--reference-only` gives MuJoCo alone (stands 32 s, hinge mean err ≈ 0.014 rad).
-   - A joint with corr ≈ −1: flip `HingeSign` / `SlideSign` on the TarsActor (A74).
-     Sluggish or overshooting joints: tune `AngularGainScale` / `LinearGainScale` (A72).
+   - A joint with corr ≈ −1: flip `HingeSign` / `SlideSign` on the TarsActor (A74). Both are +1.
+     The gain scales of A72 are gone: the servo is computed in SI and converted exactly.
    - Your call: are the gaps small enough that a MuJoCo-trained policy is worth trying in Unreal?
 4. **Checks.** `uv run ruff check .` and `uv run pytest tests/unreal -q`.
 
+## Rough-ground training (`tars_rl.env.terrain`, roadmap stage 3)
+
+Built 2026-11-03, not trained yet. One 80 m heightfield, flat at one end and rough at the other
+(tiles, thresholds, rugs, mounds); every training env starts on its own flat pad of it, turned its
+own way. Train with `uv run python -m tars_rl.train.run --profile full --terrain --out <run>`.
+
+0. **Tests:** `uv run pytest tests/env/test_terrain.py -q`. These cover: flat pads; rougher
+   along x; MJX resting TARS on rough ground without sinking, checked against the grid itself; the
+   nominal terrain resting TARS exactly like the plane; every env on its own patch.
+1. **Look at it:** `uv run python -m tars_rl.env.terrain --png runs/terrain.png`.
+   - Prints heights, steps (5 cm apart) and slopes (over 1 m) by difficulty; TARS stands on 64
+     random pads (fell 0); and MJX's cost with terrain against the flat floor.
+   - 2026-11-03 Mac: steps up to 7 cm and slopes about 10 deg at the rough end; cost 1.6x on CPU.
+   - Check: the picture gets rougher left to right. Is the rough end what the apartment should
+     ask of TARS?
+2. **Baseline (flat-trained):** `uv run python -m tars_rl.train.eval --policy runs/chain-dr/default
+   --terrain --domain-rand --episodes 256`.
+   - Adds a table by difficulty. 2026-11-03, 48 episodes on the Mac: easy 3.14 flags/0 % falls,
+     medium 0.56/31 %, rough 0.00/11 % (stuck, not falling).
+3. **After terrain training:** the same eval on the new run.
+   - Your call: does the rough third improve without losing the flat floor?
+   - Then the held-out test levels: `uv run python -m tars_rl.unreal.verify --policy <run>
+     --level bumpy|steps|slopes --engines mjx mujoco`.
+   - CPU MuJoCo is no reference on the heightfield itself: its small-sphere contact sank 15-20 mm
+     into rough ground. Engines are compared on the box-built levels.
+
 ## Unreal verification of trained policies (`tars_rl.unreal.verify`, roadmap stage 4)
 
-Setup once (box): Unreal 5.5 for Linux unzipped to `~/UnrealEngine` (~60 GB), then
-`scripts/unreal.sh build`. Not compiled yet (2026-11-03): expect a round of compile fixes.
+Setup once (box): Unreal 5.5.4 for Linux unzipped to `~/UnrealEngine` (~60 GB), then
+`scripts/unreal.sh build` (18 s; the engine ships prebuilt).
+
+2026-11-04, flat, 16 episodes, flags per episode / falls:
+
+| policy | MuJoCo | Unreal |
+|---|---|---|
+| chain-dr transformer | 4.62 / 0 % | 0.19 / 38 % |
+| gru | 4.19 / 0 % | 0.00 / 88 % |
+| default | 4.00 / 0 % | 0.06 / 88 % |
+
+The gap is ground contact (see T10). In CPU MuJoCo, the transformer scores 0 flags with 100 % falls, as in Unreal, under one combination: elliptic cone + `impratio 10` + no-slip, with or without stiff contacts.
+
+It keeps 3.8-4.2 flags with no falls under each of these:
+- stiff contacts (`solref 0.004`);
+- elliptic + `impratio 10`;
+- elliptic + no-slip;
+- no-slip alone.
+
+`impratio 10` + no-slip on the pyramidal cone is untested. TARS stands still in every variant, so none of them is unstable at rest.
 
 0. **Without Unreal** (any machine): `uv run pytest tests/env/test_levels.py tests/unreal -q`.
    A stand-in speaking the bridge protocol (MuJoCo behind it) must reproduce MuJoCo exactly;
@@ -98,7 +154,7 @@ Setup once (box): Unreal 5.5 for Linux unzipped to `~/UnrealEngine` (~60 GB), th
      fast each ran.
    - Your call: is the flat-floor gap small enough to move on to the harder levels?
    - Big gap with a falling TARS: first run T10 (`scripts/unreal.sh sequence` + its eval);
-     the body itself (gains A72, signs A74) may not match before the policy is to blame.
+     the body itself (servo, signs A74) may not match before the policy is to blame.
 
 ## T17 Self-guiding search (`tars_rl.tune`)
 

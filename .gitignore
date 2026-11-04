@@ -155,7 +155,8 @@ activemq-data/
 .venv
 /env/
 venv/
-ENV/
+# Anchored: git on macOS ignores case, so a bare ENV/ also hid src/tars_rl/env/ and tests/env/
+/ENV/
 env.bak/
 venv.bak/
 

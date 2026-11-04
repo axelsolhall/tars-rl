@@ -9,7 +9,6 @@
 #include "HAL/PlatformProcess.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
-#include "PhysicsEngine/PhysicsSettings.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -45,12 +44,6 @@ bool ReadVec(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, FVector& Out)
 	return true;
 }
 
-int32 Substeps(double Dt)
-{
-	const UPhysicsSettings* S = UPhysicsSettings::Get();
-	if (!S->bSubstepping) return 1;
-	return FMath::Min(FMath::CeilToInt(Dt / S->MaxSubstepDeltaTime - 1e-6), S->MaxSubsteps);
-}
 }  // namespace
 
 ATarsBridge::ATarsBridge()
@@ -71,8 +64,8 @@ void ATarsBridge::BeginPlay()
 		UE_LOG(LogTarsBridge, Error, TEXT("cannot listen on 127.0.0.1:%d (another Unreal on that port?)"), Port);
 		return;
 	}
-	UE_LOG(LogTarsBridge, Log, TEXT("TARS bridge listening on 127.0.0.1:%d, %.3f s steps, %d physics substeps"), Port,
-		ControlDt, Substeps(ControlDt));
+	UE_LOG(LogTarsBridge, Log, TEXT("TARS bridge listening on 127.0.0.1:%d, %.3f s steps, %d physics steps of %.4f s"),
+		Port, ControlDt, PhysicsStepsPerControl(), PhysicsDt);
 
 	FActorSpawnParameters P;
 	P.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -191,7 +184,7 @@ bool ATarsBridge::Handle(const TSharedPtr<FJsonObject>& Cmd)
 	{
 		Ok->SetNumberField(TEXT("protocol"), Protocol);
 		Ok->SetNumberField(TEXT("dt"), ControlDt);
-		Ok->SetNumberField(TEXT("substeps"), Substeps(ControlDt));
+		Ok->SetNumberField(TEXT("substeps"), PhysicsStepsPerControl());
 		Send(Ok);
 	}
 	else if (Op == TEXT("level"))
@@ -286,14 +279,20 @@ void ATarsBridge::Tick(float DeltaSeconds)
 	{
 		if (GEngine) GEngine->AddOnScreenDebugMessage(10, 1.f, FColor::Yellow,
 			FString::Printf(TEXT("TARS bridge: waiting for Python on port %d"), Port));
-		FPlatformProcess::Sleep(static_cast<float>(ControlDt));  // fixed steps never wait: idle at ~real time
+		FPlatformProcess::Sleep(static_cast<float>(PhysicsDt));  // fixed steps never wait: idle at ~real time
 		FollowCamera(DeltaSeconds);
 		return;
 	}
 	if (bStepPending)
 	{
-		EpisodeTime += DeltaSeconds;
-		Send(StateMessage(DeltaSeconds));  // the state the last frame's physics produced
+		StepTime += DeltaSeconds;
+		if (++StepFrames < PhysicsStepsPerControl())
+		{
+			if (Tars) Tars->ServoStep();  // the servos act before every physics step
+			return;
+		}
+		EpisodeTime += StepTime;
+		Send(StateMessage(static_cast<float>(StepTime)));  // the state the step's physics produced
 		bStepPending = false;
 	}
 	FollowCamera(static_cast<float>(ControlDt));
@@ -315,7 +314,11 @@ void ATarsBridge::Tick(float DeltaSeconds)
 		}
 		if (Handle(Cmd))
 		{
-			bStepPending = true;  // physics runs now; the reply goes out at the next frame's start
+			// Physics runs now and for the step's next frames; the reply goes out after the last.
+			bStepPending = true;
+			StepFrames = 0;
+			StepTime = 0;
+			Tars->ServoStep();
 			return;
 		}
 	}

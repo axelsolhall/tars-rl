@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import jax
@@ -11,6 +12,7 @@ from brax.training.agents.ppo import networks as ppo_networks
 
 from tars_rl.train.config import PROFILES, get_profile
 from tars_rl.train.eval_networks import candidates
+from tars_rl.train.memory import MemorySpec
 from tars_rl.train.networks import NetSpec, NetworkSpec, make_ppo_networks, tower_sizes
 from tars_rl.train.policy import META_FILE, load_policy, network_from_meta, save_policy
 
@@ -51,10 +53,11 @@ def test_profile_takes_a_network_description():
 
 @pytest.mark.parametrize("name", sorted(PROFILES))
 def test_default_matches_brax_exactly(name):
-    """The default description is T15's network: brax's MLP, same param tree and init values."""
+    """The default towers are T15's network: brax's MLP, same param tree and init values."""
     cfg = get_profile(name)
     key = jax.random.PRNGKey(3)
-    ours = make_ppo_networks(OBS, ACT, spec=cfg.network)
+    # Without memory: `full` reads a transformer window (2026-11-03), the towers stay T15's.
+    ours = make_ppo_networks(OBS, ACT, spec=dataclasses.replace(cfg.network, memory=MemorySpec()))
     pol = tuple(cfg.network.policy.width for _ in range(cfg.network.policy.depth))
     val = tuple(cfg.network.value.width for _ in range(cfg.network.value.depth))
     brax = ppo_networks.make_ppo_networks(OBS, ACT, policy_hidden_layer_sizes=pol,

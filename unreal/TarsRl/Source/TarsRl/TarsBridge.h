@@ -1,14 +1,16 @@
 // The Unreal side of the Python bridge (tars_rl.unreal.bridge holds the protocol): a TCP server
 // on 127.0.0.1:TarsPort that lets a Python policy drive TARS in lockstep.
 //
-// Each frame, before physics, the bridge first answers the previous `step` with the state that
-// physics produced, then blocks on the socket until the next `step` arrives (answering `hello`,
-// `level`, `reset` and `flag` immediately in between). So the world advances one fixed control
-// step (20 ms, physics substeps of 2 ms) per `step`, and only as fast as Python asks: paced to
-// the wall clock to watch, or flat out to evaluate. Without a client it idles at about real time.
+// One engine frame is one physics step (PhysicsDt, 2 ms, no substeps) so that TARS's servos act
+// before every step (ATarsActor::ServoStep). A `step` runs ControlDt / PhysicsDt frames (10):
+// before each the bridge calls ServoStep, after the last it answers with the state physics
+// produced, then blocks on the socket until the next `step` arrives (answering `hello`, `level`,
+// `reset` and `flag` immediately in between). So the world advances one fixed control step
+// (20 ms) per `step`, and only as fast as Python asks: paced to the wall clock to watch, or flat
+// out to evaluate. Without a client it idles at about real time.
 //
-// The frame time must be fixed: ATarsGameMode turns on Unreal's fixed time step in bridge mode,
-// and every state reply carries the frame's dt so Python can refuse anything else.
+// The frame time must be fixed: ATarsGameMode turns on Unreal's fixed time step, and every state
+// reply carries the step's dt so Python can refuse anything else.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -30,7 +32,10 @@ public:
 	ATarsBridge();
 
 	int32 Port = 5577;
-	double ControlDt = 0.02;  // s per step; the game mode sets the engine's fixed time step to this
+	double ControlDt = 0.02;  // s per `step`
+	// s per frame = per physics step: the BodySpec timestep (Python checks dt / substeps against it).
+	double PhysicsDt = 0.002;
+	int32 PhysicsStepsPerControl() const { return FMath::Max(1, FMath::RoundToInt(ControlDt / PhysicsDt)); }
 	FVector Origin = FVector::ZeroVector;  // the floor under level point (0, 0), world cm
 
 protected:
@@ -56,6 +61,8 @@ private:
 	UPROPERTY() TObjectPtr<ATarsLevel> Level;
 	UPROPERTY() TObjectPtr<ACameraActor> Camera;
 	bool bStepPending = false;
+	int32 StepFrames = 0;  // physics frames run of the pending step
+	double StepTime = 0;
 	double EpisodeTime = 0;
 	double BodyHeightCm = 36;
 	FString Hud;

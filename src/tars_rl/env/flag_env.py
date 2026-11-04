@@ -1,5 +1,7 @@
 """FlagEnv: TARS on a flat arena walking to a randomly placed flag, in MJX (A1).
 
+With `config.terrain` the floor is rough ground instead (`tars_rl.env.terrain`, stage 3).
+
 Functional and jit/vmap-friendly: `reset(rng) -> State`, `step(state, action) -> State`.
 
 Action (A43): one float in [-1, 1] per BodySpec actuator, in actuator order (both hinges, then
@@ -32,6 +34,7 @@ import numpy as np
 from mujoco import mjx
 
 from tars_rl.body.spec import BodySpec
+from tars_rl.env import terrain
 from tars_rl.env.arena import FLAG_BODY, build_arena_mjcf, load_body_spec
 from tars_rl.env.config import EnvConfig
 from tars_rl.env.sensors import (
@@ -87,9 +90,14 @@ class FlagEnv:
         if self.config.sensor_delay_steps not in (0, 1):
             raise ValueError("sensor_delay_steps must be 0 or 1")
         xml = build_arena_mjcf(self.spec)
+        if self.config.terrain is not None:
+            terrain.install_point_contact()
+            xml = terrain.add_to_mjcf(xml, self.config.terrain)
         # The default model is built exactly as the benchmark's was; mark2 adds sites + sensors.
         self.mj_model = (add_mark2_sensors(xml, self.spec) if self._mark2
                          else mujoco.MjModel.from_xml_string(xml))
+        if self.config.terrain is not None:
+            terrain.fill_model(self.mj_model, self.config.terrain)
         self.mjx_model = mjx.put_model(self.mj_model)
         m = self.mj_model
 

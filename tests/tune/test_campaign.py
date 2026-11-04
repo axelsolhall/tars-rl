@@ -17,7 +17,8 @@ def test_start_is_the_published_go1_settings_and_t15_networks():
         assert getattr(cfg, k) == pytest.approx(getattr(full, k))
     assert cfg.unroll_length == full.unroll_length
     assert cfg.num_updates_per_batch == full.num_updates_per_batch
-    assert cfg.network == full.network
+    # The tuner searches the towers only; memory is not part of its space.
+    assert (cfg.network.policy, cfg.network.value) == (full.network.policy, full.network.value)
 
 
 @pytest.mark.parametrize("profile", sorted(camp.PROFILES))

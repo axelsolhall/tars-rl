@@ -256,7 +256,7 @@ def record_video(policy_dir: Path, out: Path, episodes: int, score_seed: int, lo
     import jax.numpy as jnp
     import numpy as np
 
-    from tars_rl.env.config import EnvConfig, RewardConfig
+    from tars_rl.env.config import EnvConfig
     from tars_rl.env.eval import _freeze, run_episodes
     from tars_rl.env.flag_env import FlagEnv
     from tars_rl.env.rollout import FlagRollout
@@ -265,7 +265,7 @@ def record_video(policy_dir: Path, out: Path, episodes: int, score_seed: int, lo
 
     saved = load_policy(policy_dir)
     m = saved.meta
-    env = FlagEnv(config=EnvConfig(**{**m["env"], "reward": RewardConfig(**m["env"]["reward"])}))
+    env = FlagEnv(config=EnvConfig.from_dict(m["env"]))
     policy = saved.policy()
     rng = jax.random.PRNGKey(score_seed + EVAL_SEED_OFFSET)  # the held-out flags (train.eval)
     r = run_episodes(env, policy, rng, episodes)

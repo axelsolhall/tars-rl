@@ -18,18 +18,15 @@ DEFINE_LOG_CATEGORY_STATIC(LogTars, Log, All);
 namespace
 {
 constexpr double M2CM = 100.0;
+constexpr double NM2UE = 1.0e4;  // torque: N m = kg m^2/s^2 -> kg cm^2/s^2
 constexpr double FallTiltDeg = 45.0;  // same fall line as tars_rl.unreal.compare
+constexpr int32 RecordEvery = 10;  // scripted mode: one pose row per 10 physics steps (50 Hz)
 const TCHAR* Sides[2] = {TEXT("left"), TEXT("right")};
 
-struct FServoGains
+// MuJoCo's <position kp kv forcerange>: SI in, SI out.
+double ServoForce(const FTarsServo& S, double Target, double Q, double Qd)
 {
-	float Kp, Kv, Max;  // Unreal drive units
-};
-
-FServoGains Gains(const FTarsServo& S, double GainScale, double LimitScale)
-{
-	return {static_cast<float>(S.Kp * GainScale), static_cast<float>(S.Kv * GainScale),
-		static_cast<float>(S.ForceLimit * LimitScale)};
+	return FMath::Clamp(S.Kp * (Target - Q) - S.Kv * Qd, -S.ForceLimit, S.ForceLimit);
 }
 
 bool ReadJson(const FString& Path, TSharedPtr<FJsonObject>& Out)
@@ -192,7 +189,9 @@ void ATarsActor::BuildBody()
 	SlabMaterial->StaticFriction = Spec.Friction;
 	SlabMaterial->bOverrideFrictionCombineMode = true;
 	SlabMaterial->FrictionCombineMode = EFrictionCombineMode::Max;  // MuJoCo takes the max too
-	SlabMaterial->Restitution = 0.f;
+	SlabMaterial->Restitution = 0.f;  // MuJoCo contacts never bounce
+	SlabMaterial->bOverrideRestitutionCombineMode = true;
+	SlabMaterial->RestitutionCombineMode = EFrictionCombineMode::Min;
 
 	// Unreal: cm, x forward, y RIGHT. MuJoCo's left (+y) is Unreal's -y (A73).
 	const double HingeZ = Spec.CentralSizeM.Z / 2 * M2CM;
@@ -200,9 +199,6 @@ void ATarsActor::BuildBody()
 	const FVector Centre(0, 0, HingeZ);
 	Central = MakeBox(TEXT("central"), Spec.CentralSizeM * M2CM, Spec.CentralMass, Centre, true);
 
-	// Torque limit scales like the gains (Nm -> kg cm^2/s^2); force N -> kg cm/s^2 (A72).
-	const FServoGains H = Gains(Spec.HingeServo, AngularGainScale, AngularGainScale);
-	const FServoGains S = Gains(Spec.SlideServo, LinearGainScale, M2CM);
 	const float HingeLimitDeg = static_cast<float>(FMath::RadiansToDegrees(
 		FMath::Max(FMath::Abs(Spec.HingeRange.X), FMath::Abs(Spec.HingeRange.Y))));
 	const float SlideLimitCm = static_cast<float>(
@@ -220,18 +216,13 @@ void ATarsActor::BuildBody()
 		// Hinge: twist is the constraint's x axis; yaw 90 turns it onto the body y axis.
 		UPhysicsConstraintComponent* Hinge = MakeConstraint(*(Side + TEXT("_hinge")), Centre,
 			FRotator(0, 90, 0));
-		Hinge->SetAngularTwistLimit(ACM_Limited, HingeLimitDeg);
-		Hinge->SetAngularDriveMode(EAngularDriveMode::TwistAndSwing);
-		Hinge->SetOrientationDriveTwistAndSwing(false, true);  // (swing, twist): drive the twist hinge only
-		Hinge->SetAngularDriveParams(H.Kp, H.Kv, H.Max);
+		Hinge->SetAngularTwistLimit(ACM_Limited, HingeLimitDeg);  // no drive: ServoStep turns it
 		Hinge->SetConstrainedComponents(Carriage, NAME_None, Central, NAME_None);
 
 		// Slide: along the arm's length (constraint z), carried round by the hinge.
 		UPhysicsConstraintComponent* Slide = MakeConstraint(*(Side + TEXT("_slide")), ArmPos,
 			FRotator::ZeroRotator);
-		Slide->SetLinearZLimit(LCM_Limited, SlideLimitCm);
-		Slide->SetLinearPositionDrive(false, false, true);
-		Slide->SetLinearDriveParams(S.Kp, S.Kv, S.Max);
+		Slide->SetLinearZLimit(LCM_Limited, SlideLimitCm);  // no drive: ServoStep moves it
 		Slide->SetConstrainedComponents(Arm, NAME_None, Carriage, NAME_None);
 
 		// Central and arm overlap in no pose MuJoCo checks, but MuJoCo excludes their contact.
@@ -268,18 +259,46 @@ TArray<double> ATarsActor::TargetsAt(double T) const
 	return Out;
 }
 
-void ATarsActor::ApplyTargets(const TArray<double>& Targets)
+void ATarsActor::ApplyTargets(const TArray<double>& InTargets)
 {
 	// Actuator order: left_hinge, right_hinge, left_slide, right_slide.
+	Targets = {HingeSign * InTargets[0], HingeSign * InTargets[1], SlideSign * InTargets[2],
+		SlideSign * InTargets[3]};
+}
+
+void ATarsActor::ServoStep()
+{
+	// Joint state from the slab states, as tars_rl.unreal.bodystate.joint_state reads it: the
+	// hinge is the arm's twist about the central body's y axis, the slide the arm centre's offset
+	// from the hinge point along the arm's z. Unreal units in, SI for the servo.
+	const FQuat Qc = Central->GetComponentQuat();
+	const FVector Xc = Central->GetComponentLocation();
+	const FVector Vc = Central->GetPhysicsLinearVelocity();  // the slab's centre is its centre of mass
+	const FVector Wc = Central->GetPhysicsAngularVelocityInRadians();
+	const FVector Axis = Qc.GetAxisY();
+	const double ArmY = (Spec.CentralSizeM.Y / 2 + Spec.ArmGap + Spec.ArmSizeM.Y / 2) * M2CM;
 	for (int32 I = 0; I < 2; ++I)
 	{
-		const float Deg = static_cast<float>(HingeSign * FMath::RadiansToDegrees(Targets[I]));
-		Hinges[I]->SetAngularOrientationTarget(FRotator(0.f, 0.f, Deg));  // roll = twist
-		Slides[I]->SetLinearPositionTarget(FVector(0, 0, SlideSign * Targets[2 + I] * M2CM));
+		UStaticMeshComponent* Arm = Arms[I];
+		const FQuat Qa = Arm->GetComponentQuat();
+		const FVector Xa = Arm->GetComponentLocation();
+		const FVector Wa = Arm->GetPhysicsAngularVelocityInRadians();
+		const double Hinge = (Qc.Inverse() * Qa).GetTwistAngle(FVector::YAxisVector);
+		const double HingeRate = FVector::DotProduct(Wa - Wc, Axis);
+		const FVector Pivot = Xc + Qc.RotateVector(FVector(0, (I == 0 ? -1 : 1) * ArmY, 0));
+		const FVector ArmZ = Qa.GetAxisZ();
+		const FVector PivotVel = Vc + FVector::CrossProduct(Wc, Pivot - Xc);
+		const double Slide = FVector::DotProduct(Xa - Pivot, ArmZ) / M2CM;
+		const double SlideRate = FVector::DotProduct(Arm->GetPhysicsLinearVelocity() - PivotVel, ArmZ) / M2CM;
+
+		const double Tau = ServoForce(Spec.HingeServo, Targets[I], Hinge, HingeRate) * NM2UE;
+		const double F = ServoForce(Spec.SlideServo, Targets[2 + I], Slide, SlideRate) * M2CM;
+		// Equal and opposite, so the servos move TARS only by pushing on the world.
+		Arm->AddTorqueInRadians(Axis * Tau);
+		Central->AddTorqueInRadians(-Axis * Tau);
+		Arm->AddForce(ArmZ * F);
+		Central->AddForceAtLocation(-ArmZ * F, Xa);
 	}
-	Central->WakeAllRigidBodies();
-	for (UStaticMeshComponent* B : Arms) B->WakeAllRigidBodies();
-	for (UStaticMeshComponent* B : Carriages) B->WakeAllRigidBodies();
 }
 
 void ATarsActor::RecordSample()
@@ -369,10 +388,11 @@ void ATarsActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	if (!bReady) return;
-	if (!bSaved) RecordSample();
+	if (!bSaved && Frames++ % RecordEvery == 0) RecordSample();
 	if (SimTime >= KeyTimes.Last()) SaveRecording();
 	// The coming physics step runs from SimTime: target its start, like MuJoCo's seq.at(d.time).
 	ApplyTargets(TargetsAt(SimTime));
+	ServoStep();
 	SimTime += DeltaSeconds;
 }
 

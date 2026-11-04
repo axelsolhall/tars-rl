@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 
+from tars_rl.env.terrain import TerrainConfig
+
 FLAG_MODES = ("chain", "single")
 
 
@@ -43,6 +45,8 @@ class EnvConfig:
     # Memory: the observation is the last this-many frames (0 = the current frame only). Set from
     # the network description's `memory=<kind>-<steps>` by training, so env and network agree.
     history_steps: int = 0
+    # Rough ground (stage 3, `tars_rl.env.terrain`): None = the flat floor.
+    terrain: TerrainConfig | None = None
 
     def __post_init__(self) -> None:
         if self.flags not in FLAG_MODES:
@@ -54,3 +58,14 @@ class EnvConfig:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict, **overrides) -> EnvConfig:
+        """Inverse of `to_dict` (a saved policy's meta["env"]); runs saved before a field
+        existed get its default."""
+        d = {**d, **overrides}
+        d["reward"] = RewardConfig(**d["reward"]) if isinstance(d.get("reward"), dict) else \
+            d.get("reward", RewardConfig())
+        if isinstance(d.get("terrain"), dict):
+            d["terrain"] = TerrainConfig.from_dict(d["terrain"])
+        return cls(**d)

@@ -1,6 +1,7 @@
 """Score a trained policy against random moves and standing still.
 
 Run: python -m tars_rl.train.eval --policy runs/smoke --episodes 64 --seed 0
+     [--domain-rand: randomized bodies] [--terrain: rough ground, also by difficulty]
 
 Runs the trained policy, random moves and standing still (all actuators at their centred target)
 on the same flags with T13's batch runner, and prints success, falls, distance left, distance
@@ -18,28 +19,37 @@ import time
 from pathlib import Path
 
 import jax
+import numpy as np
 
 from tars_rl.env import randomize
-from tars_rl.env.config import FLAG_MODES, EnvConfig, RewardConfig
+from tars_rl.env import terrain as terrain_mod
+from tars_rl.env.config import FLAG_MODES, EnvConfig
 from tars_rl.env.eval import random_policy, report, run_episodes, summarize, zero_policy
 from tars_rl.env.flag_env import FlagEnv
 from tars_rl.env.randomize import DomainRandConfig
+from tars_rl.env.terrain import TerrainConfig
 from tars_rl.train.policy import load_policy, read_progress
 
 EVAL_SEED_OFFSET = 2_000  # eval flags differ from training and learning-curve flags
 EVAL_MODELS_OFFSET = 3_000  # held-out randomized bodies (training draws from its own seed)
+DIFFICULTY_BANDS = (("flat-easy (0-1/3)", 0.0, 1 / 3), ("medium (1/3-2/3)", 1 / 3, 2 / 3),
+                    ("rough (2/3-1)", 2 / 3, 1.0))
 
 
 def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool = True,
-             flags: str | None = None, domain_rand: DomainRandConfig | None = None) -> dict:
+             flags: str | None = None, domain_rand: DomainRandConfig | None = None,
+             terrain: TerrainConfig | None = None) -> dict:
     """`flags` overrides the flag mode (T26); runs saved before T26 have none and get chain.
     `domain_rand`: every episode gets its own randomized TARS and floor, drawn from a key no
-    training run uses (held-out bodies), the same draws for every policy."""
+    training run uses (held-out bodies), the same draws for every policy.
+    `terrain`: every episode starts on its own pad of this rough ground (held-out placements,
+    the same for every policy), whatever the policy trained on; results also come by difficulty."""
     saved = load_policy(policy_dir)
     m = saved.meta
     over = {"flags": flags} if flags else {}
-    env = FlagEnv(config=EnvConfig(**{**m["env"], "reward": RewardConfig(**m["env"]["reward"]),
-                                      **over}))
+    if terrain is not None:
+        over["terrain"] = terrain
+    env = FlagEnv(config=EnvConfig.from_dict(m["env"], **over))
     if env.spec.version != m["body_spec_version"]:
         raise ValueError(f"policy trained on BodySpec v{m['body_spec_version']}, "
                          f"env has v{env.spec.version}")
@@ -51,20 +61,32 @@ def evaluate(policy_dir: str | Path, episodes: int, seed: int, baselines: bool =
         "obs_set": env.config.obs, "observation_size": env.observation_size,
         "flags": env.config.flags, "policies": {},
         "domain_rand": domain_rand.to_dict() if domain_rand is not None else None,
+        "terrain": terrain.to_dict() if terrain is not None else None,
     }
-    models = None
-    if domain_rand is not None:
-        keys = jax.random.split(jax.random.PRNGKey(seed + EVAL_MODELS_OFFSET), episodes)
-        models = randomize.for_env(env, domain_rand)(env.mjx_model, keys)
+    keys = jax.random.split(jax.random.PRNGKey(seed + EVAL_MODELS_OFFSET), episodes)
+    fn = randomize.for_env(env, domain_rand)
+    models = fn(env.mjx_model, keys) if fn is not None else None
+    bands = None
+    if terrain is not None:
+        pad = np.asarray(terrain_mod.placements(terrain, keys)[0])
+        diff = terrain_mod.pad_difficulty(terrain, pad) / max(terrain.difficulty_max, 1e-9)
+        bands = {name: (diff >= lo) & (diff <= hi) for name, lo, hi in DIFFICULTY_BANDS}
+        res["by_difficulty"] = {}
     runs = [("trained", saved.policy())]
     if baselines:
         n = env.action_size
         runs += [("random", random_policy(n)), ("still", zero_policy(n))]
     for name, pol in runs:
         t0 = time.perf_counter()
-        s = summarize(run_episodes(env, pol, rng, episodes, models), env)
+        r = run_episodes(env, pol, rng, episodes, models)
+        s = summarize(r, env)
         s["wall_s"] = time.perf_counter() - t0
         res["policies"][name] = s
+        if bands is not None:
+            per = {k: v for k, v in r.items() if not k.endswith("_ep0")}
+            res["by_difficulty"][name] = {
+                band: summarize({k: v[mask] for k, v in per.items()}, env)
+                for band, mask in bands.items() if mask.any()}
     p = res["policies"]
     res["beats_baselines"] = baselines and all(
         p["trained"]["success_rate"] > p[b]["success_rate"]
@@ -79,7 +101,22 @@ def report_all(res: dict) -> None:
     print(f"Policy {res['policy']} ({res.get('algo', 'ppo')}, profile {res['profile']})")
     if res.get("domain_rand"):
         print(f"Scored on randomized TARS: {res['domain_rand']}")
+    if res.get("terrain"):
+        print(f"Scored on rough ground: terrain v{res['terrain']['version']}, one random pad "
+              f"per episode")
     report(res)
+    if res.get("by_difficulty"):
+        pols = list(res["by_difficulty"])
+        print("\nBy terrain difficulty (flags tagged per episode / falls):")
+        print(f"{'':<24}" + "".join(f"{p:>16}" for p in pols))
+        for band, _, _ in DIFFICULTY_BANDS:
+            cells = []
+            for p in pols:
+                b = res["by_difficulty"][p].get(band)
+                cells.append(f"{b['tags_per_ep']:.2f} / {b['fall_rate']:4.0%}" if b else "-")
+            n = next((res["by_difficulty"][p][band]["episodes"] for p in pols
+                      if band in res["by_difficulty"][p]), 0)
+            print(f"{band + f' ({n} ep)':<24}" + "".join(f"{c:>16}" for c in cells))
     print(f"\nTrained beats random and still (success up, distance down): "
           f"{'YES' if res['beats_baselines'] else 'NO'}")
     if res["curve"]:
@@ -102,10 +139,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="flag mode (default: the run's own; chain for runs saved before T26)")
     p.add_argument("--domain-rand", action="store_true",
                    help="score on randomized TARS bodies and floors (default ranges)")
+    p.add_argument("--terrain", action="store_true",
+                   help="score on rough ground (tars_rl.env.terrain), one random pad per episode")
     p.add_argument("--json", help="also write the results to this JSON file")
     a = p.parse_args(argv)
     res = evaluate(a.policy, a.episodes, a.seed, flags=a.flags,
-                   domain_rand=DomainRandConfig() if a.domain_rand else None)
+                   domain_rand=DomainRandConfig() if a.domain_rand else None,
+                   terrain=TerrainConfig() if a.terrain else None)
     report_all(res)
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)

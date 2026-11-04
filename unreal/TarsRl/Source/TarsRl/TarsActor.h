@@ -2,17 +2,24 @@
 //
 // Three simulated box slabs (central body + two arms). Each arm hangs on a chain of two
 // Chaos constraints, matching MuJoCo's hinge-then-slide joints (A69):
-//   central --hinge (twist about the body y axis, angular drive)--> carriage
-//   carriage --slide (along the arm's length, linear drive)--> arm
+//   central --hinge (twist about the body y axis)--> carriage --slide (along the arm)--> arm
 // The carriage is a tiny invisible body with no collisions. A third, fully free constraint
 // between central and arm only disables their collision, like MuJoCo's <exclude>.
+//
+// The constraints only hold the joint axes and limits; the servos are ServoStep, MuJoCo's
+// position actuator computed here before every physics step and applied as equal and opposite
+// torques / forces: clip(kp (target - q) - kv qdot, +-limit). Chaos's own joint drives are not
+// that servo (acceleration mode by default, a hidden 1.5x angular scale, limits on position
+// impulses): with them the hinges hit 0.6 rad in 20 ms where MuJoCo's take 0.5 s (2026-11-04).
+//
+// One engine frame is one physics step (2 ms, no substeps), so ServoStep runs per step.
 //
 // Two modes. Scripted (T10, the default for a placed actor): each tick it plays the target
 // sequence (Content/TarsData/sequence.json) and records the three slab poses to
 // Saved/TarsRuns/unreal_poses.csv for `python -m tars_rl.unreal.eval`. Bridge (bScripted false,
-// spawned by ATarsBridge): no tick of its own; the bridge sets servo targets each control step
-// and reads the slab states back for the policy. Nothing is replayed in either mode: the motion
-// is Unreal's physics answering the targets.
+// spawned by ATarsBridge): no tick of its own; the bridge sets servo targets each control step,
+// calls ServoStep before each of its physics steps and reads the slab states back for the
+// policy. Nothing is replayed in either mode: the motion is Unreal's physics answering the targets.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -62,7 +69,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TARS") bool bScripted = true;
 	bool IsReady() const { return bReady; }
 	// Servo targets in SI, actuator order (left_hinge, right_hinge, left_slide, right_slide).
-	void SetTargets(const TArray<double>& Targets) { ApplyTargets(Targets); }
+	void SetTargets(const TArray<double>& InTargets) { ApplyTargets(InTargets); }
+	// The four servo forces for the coming physics step, from the current slab states.
+	void ServoStep();
 	// Central, left arm, right arm.
 	TArray<FTarsSlabState> ReadSlabs() const;
 	FVector CentralLocation() const;
@@ -74,13 +83,10 @@ public:
 	// Relative to the project's Saved directory.
 	UPROPERTY(EditAnywhere, Category = "TARS") FString RecordFile = TEXT("TarsRuns/unreal_poses.csv");
 
-	// Drive direction conventions (A74): flip to -1 if the eval shows a joint's corr near -1.
+	// Joint direction conventions (A74): flip to -1 if the eval shows a joint's corr near -1.
+	// +1 for both: the mirror in y (A73) keeps a turn about y and a move along z as they are.
 	UPROPERTY(EditAnywhere, Category = "TARS") float HingeSign = 1.f;
 	UPROPERTY(EditAnywhere, Category = "TARS") float SlideSign = 1.f;
-	// SI -> Unreal drive units (A72): torque and angular gains x1e4 (kg cm^2), force x100,
-	// linear stiffness/damping x1 (kg/s^2 and kg/s are the same in cm). Tune here, not in code.
-	UPROPERTY(EditAnywhere, Category = "TARS") float AngularGainScale = 1.0e4f;
-	UPROPERTY(EditAnywhere, Category = "TARS") float LinearGainScale = 1.f;
 	UPROPERTY(EditAnywhere, Category = "TARS") float CarriageMassKg = 0.01f;
 
 protected:
@@ -97,7 +103,7 @@ private:
 	UPhysicsConstraintComponent* MakeConstraint(FName Name, const FVector& LocalCm,
 		const FRotator& LocalRot);
 	TArray<double> TargetsAt(double T) const;
-	void ApplyTargets(const TArray<double>& Targets);
+	void ApplyTargets(const TArray<double>& InTargets);
 	void RecordSample();
 	void SaveRecording();
 
@@ -111,9 +117,11 @@ private:
 	UPROPERTY() TArray<TObjectPtr<UPhysicsConstraintComponent>> NoCollide;
 
 	FTarsBodySpec Spec;
+	TArray<double> Targets = {0, 0, 0, 0};  // SI, actuator order, signs applied
 	TArray<double> KeyTimes;
 	TArray<TArray<double>> KeyTargets;  // per keyframe, actuator order
 	double SimTime = 0;
+	int64 Frames = 0;
 	double StandTime = -1;  // first time tilt > 45 deg, -1 while upright
 	TArray<FString> Lines;
 	bool bReady = false, bSaved = false;

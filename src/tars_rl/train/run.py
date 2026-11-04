@@ -30,10 +30,15 @@ from mujoco_playground import wrapper
 
 from tars_rl.env import randomize
 from tars_rl.env.config import EnvConfig
-from tars_rl.env.eval import _freeze, run_episodes  # T13's batch runner; freezes done episodes
+from tars_rl.env.eval import (  # T13's batch runner; freezes done episodes
+    _freeze,
+    _with_model,
+    run_episodes,
+)
 from tars_rl.env.flag_env import FlagEnv
 from tars_rl.env.randomize import DomainRandConfig
 from tars_rl.env.rollout import FlagRollout
+from tars_rl.env.terrain import TerrainConfig
 from tars_rl.train.adapter import PlaygroundFlagEnv
 from tars_rl.train.config import PPOConfig, get_profile
 from tars_rl.train.networks import network_factory
@@ -46,17 +51,27 @@ CURVE_SEED_OFFSET = 1_000  # curve flags come from seed + this, never the traini
 WRAP_FOR_TRAINING = functools.partial(wrapper.wrap_for_brax_training, full_reset=True)
 
 
-def make_curve_eval(env: FlagEnv, make_inference_fn, n: int, rng: jax.Array):
-    """`params -> metrics` on the same n flags every call; compiled once for the whole run."""
+def make_curve_eval(env: FlagEnv, make_inference_fn, n: int, rng: jax.Array,
+                    models: tuple | None = None):
+    """`params -> metrics` on the same n flags every call; compiled once for the whole run.
+    `models`: (batched model, in_axes), one per episode (e.g. terrain patches); None: nominal."""
     k_reset, k_pol = jax.random.split(rng)
+    if models is None:
+        reset, step = jax.vmap(env.reset), jax.vmap(env.step)
+    else:
+        model_v, axes = models
+        reset = functools.partial(jax.vmap(_with_model(env, env.reset), in_axes=(axes, 0)),
+                                  model_v)
+        step = functools.partial(jax.vmap(_with_model(env, env.step), in_axes=(axes, 0, 0)),
+                                 model_v)
 
     @jax.jit
     def go(params):
         policy = as_policy(make_inference_fn, params)
-        s0 = jax.vmap(env.reset)(jax.random.split(k_reset, n))
+        s0 = reset(jax.random.split(k_reset, n))
 
         def body(s, k):
-            new = jax.vmap(env.step)(s, policy(k, s.obs))
+            new = step(s, policy(k, s.obs))
             return _freeze(s.done, s, new), None
 
         s, _ = jax.lax.scan(body, s0, jax.random.split(k_pol, env.config.max_steps))
@@ -106,8 +121,15 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
     inference = make_inference(env.observation_size, env.action_size, cfg.network,
                                cfg.normalize_observations)
     log(f"network {cfg.network}")
+    # On rough ground the curve runs where training does: held-out patches and bodies, so it
+    # shows whether TARS learns the terrain (the flat-floor curve would hide it).
+    curve_models = None
+    if env.config.terrain is not None:
+        keys = jax.random.split(jax.random.PRNGKey(seed + CURVE_SEED_OFFSET + 1),
+                                cfg.curve_episodes)
+        curve_models = randomize.for_env(env, domain_rand)(env.mjx_model, keys)
     curve_eval = make_curve_eval(env, inference, cfg.curve_episodes,
-                                 jax.random.PRNGKey(seed + CURVE_SEED_OFFSET))
+                                 jax.random.PRNGKey(seed + CURVE_SEED_OFFSET), curve_models)
     t0 = time.perf_counter()
 
     def write(line: dict) -> None:
@@ -146,8 +168,9 @@ def train(profile: str, seed: int, out: str | Path, cfg: PPOConfig | None = None
         normalize_observations=cfg.normalize_observations,
         action_repeat=cfg.action_repeat,
         network_factory=network_factory(cfg.network),
-        # Each parallel env gets its own TARS and floor (tars_rl.env.randomize); None = nominal.
-        randomization_fn=randomize.for_env(env, domain_rand) if domain_rand is not None else None,
+        # Each parallel env gets its own TARS, floor friction and, with terrain, its own patch of
+        # rough ground (tars_rl.env.randomize); None = every env nominal.
+        randomization_fn=randomize.for_env(env, domain_rand),
         seed=seed,
         progress_fn=progress_fn,
         policy_params_fn=policy_params_fn,
@@ -177,9 +200,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", required=True)
     p.add_argument("--timesteps", type=int, help="override the profile's num_timesteps")
-    p.add_argument("--domain-rand", action="store_true",
-                   help="randomize friction, masses, motor strength and centre of mass per env "
-                   "(tars_rl.env.randomize, default ranges)")
+    p.add_argument("--no-domain-rand", dest="domain_rand", action="store_false",
+                   help="train every env on the nominal TARS and floor. Default: randomize "
+                   "friction, masses, motor strength and centre of mass per env "
+                   "(tars_rl.env.randomize); without it, policies trained before 2026-11-03 fell "
+                   "in 22-78 %% of episodes once the physics changed, against 0-1 %% with it")
+    p.add_argument("--domain-rand", dest="domain_rand", action="store_true",
+                   help=argparse.SUPPRESS)  # the default since 2026-11-03; kept for old scripts
+    p.add_argument("--terrain", action="store_true",
+                   help="train on rough ground (tars_rl.env.terrain): each env on its own patch, "
+                   "from flat to rough")
     p.add_argument("--network", help="network description (tars_rl.train.networks), e.g. "
                    "'policy=simba-2x128-relu-layer-e4 value=bro-2x256-relu-layer'; "
                    "default: the profile's")
@@ -188,7 +218,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.network:
         over["network"] = a.network
     dr = DomainRandConfig() if a.domain_rand else None
-    train(a.profile, a.seed, a.out, get_profile(a.profile, **over), domain_rand=dr)
+    env_config = EnvConfig(terrain=TerrainConfig()) if a.terrain else None
+    train(a.profile, a.seed, a.out, get_profile(a.profile, **over), env_config=env_config,
+          domain_rand=dr)
     return 0
 
 

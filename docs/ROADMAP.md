@@ -35,6 +35,10 @@ What the longer stages contain:
   - small steps, 1–3 cm (thresholds, rugs);
   - gentle slopes.
   The terrain gets harder as TARS succeeds.
+  Built 2026-11-03 (`tars_rl.env.terrain`, `train.run --terrain`). Every env starts on its own
+  patch of one shared heightfield, from flat to rough, instead of the terrain getting harder
+  per env as it succeeds: brax fixes each env's model when training starts. If the rough third
+  stays out of reach, the next step is a schedule (`difficulty_max` raised between runs).
 - **Stage 4, Unreal gate:** the policy trained in MuJoCo runs in Unreal's own physics, on uneven floors and steps.
 - **Stage 6, decider in Unreal:** an apartment-like level with objects. The loop is camera → Claude → flag.
 - **Stage 7, real TARS:**

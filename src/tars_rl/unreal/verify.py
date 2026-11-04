@@ -32,7 +32,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from tars_rl.env.config import EnvConfig, RewardConfig
+from tars_rl.env.config import EnvConfig
 from tars_rl.env.eval import summarize
 from tars_rl.env.flag_env import FlagEnv
 from tars_rl.env.levels import LEVELS, Level, make_level
@@ -159,8 +159,7 @@ def run_episode(rules: Rules, engine: Engine, act, key: jax.Array, label: str,
 def load(policy_dir: str | Path, flags: str = "chain"):
     saved = load_policy(policy_dir)
     m = saved.meta
-    env = FlagEnv(config=EnvConfig(**{**m["env"], "reward": RewardConfig(**m["env"]["reward"]),
-                                      "flags": flags}))
+    env = FlagEnv(config=EnvConfig.from_dict(m["env"], flags=flags))
     if env.spec.version != m["body_spec_version"]:
         raise ValueError(f"policy trained on BodySpec v{m['body_spec_version']}, "
                          f"env has v{env.spec.version}")

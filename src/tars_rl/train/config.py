@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 
+from tars_rl.train.memory import MemorySpec
 from tars_rl.train.networks import NetSpec, NetworkSpec
 
 
@@ -59,6 +60,10 @@ PROFILES: dict[str, PPOConfig] = {
         num_minibatches=32,
         unroll_length=20,
         num_updates_per_batch=4,
+        # Transformer memory over 25 frames is the standard since 2026-11-03: with domain
+        # randomization it tied gru for the most flags on randomized bodies and led the
+        # apartment level (runs/chain-dr), at twice gru's training time.
+        network=NetworkSpec(memory=MemorySpec("transformer", 25)),
     ),
     "smoke": PPOConfig(
         num_timesteps=2_560,

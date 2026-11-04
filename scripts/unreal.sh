@@ -7,6 +7,7 @@
 #   scripts/unreal.sh fast [N]          N headless Unreals (no rendering) on ports 5577..
 #   scripts/unreal.sh stop              stop the headless ones
 #   scripts/unreal.sh sequence          T10: the scripted body comparison, in a window
+#   scripts/unreal.sh sequence-fast     T10 headless: records the CSV (~40 s) and exits
 #
 # Then drive it from Python, e.g.
 #   uv run python -m tars_rl.unreal.verify --policy runs/... --level flat --realtime   (view)
@@ -36,6 +37,24 @@ case "${1:-}" in
     need_engine
     exec "$editor" "$project" -game -windowed -ResX=1600 -ResY=900 -TarsMode=sequence -log
     ;;
+  sequence-fast)
+    need_engine
+    csv="$root/unreal/TarsRl/Saved/TarsRuns/unreal_poses.csv"
+    mkdir -p "$logs"
+    rm -f "$csv"
+    "$editor" "$project" -game -nullrhi -nosound -unattended -TarsMode=sequence \
+      -abslog="$logs/sequence.log" > /dev/null 2>&1 &
+    pid=$!
+    # The actor writes the CSV once the sequence ends; Unreal itself keeps running, so stop it.
+    for _ in $(seq 600); do
+      [ -s "$csv" ] && break
+      kill -0 $pid 2>/dev/null || break
+      sleep 1
+    done
+    kill $pid 2>/dev/null || true
+    [ -s "$csv" ] || { echo "no recording; see $logs/sequence.log" >&2; exit 1; }
+    echo "recorded $csv"
+    ;;
   fast)
     need_engine
     n=${2:-1}
@@ -64,7 +83,7 @@ case "${1:-}" in
     [ -f "$pids" ] && xargs -r kill < "$pids" && rm -f "$pids" && echo stopped || echo "nothing running"
     ;;
   *)
-    sed -n '2,15p' "$0"
+    sed -n '2,16p' "$0"
     exit 1
     ;;
 esac
