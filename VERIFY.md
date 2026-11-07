@@ -268,8 +268,21 @@ Unreal (all Unreal fixes above; `runs/sim2sim/levels/`, older Unreal sweeps in i
 | stage3 gru | 3.66/0 · 3.19/3 · 2.22/25 | 2.22/16 · 1.72/6 · 1.28/28 | 1.81/28 · 1.38/12 · 1.06/34 | 4.06/3 · 3.41/0 · 2.50/25 | 3.50/19 · 2.59/19 · 1.25/62 |
 | contact-dr transformer (flat) | 3.97/0 · 3.81/0 · 2.38/22 | 1.88/44 · 2.00/28 · 1.31/31 | 1.00/28 · 1.06/16 · 0.72/28 | 4.66/0 · 4.16/0 · 2.31/16 | 1.47/66 · 1.19/62 · 1.75/28 |
 | stage3b gru-contact | 3.84/0 · 3.72/0 · 3.16/0 | 2.16/22 · 2.03/6 · 1.62/12 | 1.75/19 · 1.88/9 · 1.56/19 | 3.44/3 · 3.88/0 · 3.34/3 | 3.62/12 · 3.03/16 · 1.94/38 |
+| stage3c transformer-s0 | 3.78/0 · 3.16/3 · 2.56/9 | 2.12/25 · 1.53/19 · 1.34/12 | 1.62/25 · 1.47/22 · 1.06/38 | 3.94/0 · 3.22/0 · 2.28/12 | 3.31/25 · 2.34/22 · 1.12/44 |
+| stage3c transformer-s1 | 2.94/0 · 3.22/0 · 3.06/0 | 1.69/19 · 1.69/0 · 1.50/9 | 1.03/41 · 1.34/34 · 1.38/22 | 2.94/3 · 3.22/0 · 2.78/0 | 2.81/19 · 2.66/6 · 1.47/47 |
+| stage3c gru-s1 | 3.81/0 · 3.09/0 · 2.34/19 | 2.38/22 · 1.59/6 · 0.84/28 | 1.41/41 · 1.44/16 · 1.12/38 | 4.22/0 · 3.50/0 · 2.50/19 | 3.34/9 · 2.56/12 · 1.66/44 |
 
-(bumpy: every policy under 0.35 flags in every engine.)
+(bumpy: every policy under 0.40 flags in every engine.)
+
+2026-11-05, stage3c (`runs/stage3c/`): the full recipe (terrain + body DR + `--contact-dr`),
+transformer seeds 0 and 1 (2.8 h each) and gru seed 1 (1.9 h) as the seed control for
+stage3b gru-contact (seed 0). Same 32 episodes per level.
+- Seeds differ as much as recipes: gru-contact seed 1 falls 19 % on Unreal's flat floor where
+  seed 0 fell 0 %; transformer seed 1 walks Unreal's flat floor at 3.06/0, seed 0 at 2.56/9.
+- With contact-dr, both transformer seeds fall less in Unreal than gru seed 1 on flat, steps
+  and obstacles; slopes and the apartment fall 22-47 % for every policy.
+- MuJoCo scores (256 episodes, `eval_*.json`), transformer-s0: flat 3.47/1 %, randomized bodies
+  2.95/7 %, rough terrain 1.60/48 %.
 
 - Bullet walks every policy at ~80-90 % of MuJoCo's flags, with few falls. Unreal walks the
   transformers at ~60-80 %, but the gru and default policies fall 25-75 % of the time there.

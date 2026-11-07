@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "about": "Main dimensions of the 50 cm TARS. Fusion user parameters are created from these expressions (same names, same formulas); the simulator's body spec is derived from the same values. Height is fixed; `baby` widens and deepens the body without making it taller. `parts` are bought parts placed as blocks: size along x (depth), y (width), z (up) in the parent component's frame, with their real mass.",
+  "parameters": [
+    {
+      "name": "height",
+      "expr": "500 mm",
+      "comment": "total height, fixed",
+      "unit": "mm"
+    },
+    {
+      "name": "baby",
+      "expr": "1.05",
+      "comment": "multiplier on depth and widths only; 1.1 = 10 % wider and deeper",
+      "unit": ""
+    },
+    {
+      "name": "base_depth",
+      "expr": "height * 0.25",
+      "comment": "depth before baby (36 cm sim body: 9 cm / 36 cm)",
+      "unit": "mm"
+    },
+    {
+      "name": "base_central_w",
+      "expr": "height * 0.25",
+      "comment": "central slab width before baby (9 / 36)",
+      "unit": "mm"
+    },
+    {
+      "name": "base_arm_w",
+      "expr": "height * 0.125",
+      "comment": "each arm's width before baby (4.5 / 36)",
+      "unit": "mm"
+    },
+    {
+      "name": "depth",
+      "expr": "base_depth * baby",
+      "comment": "front to back, all slabs",
+      "unit": "mm"
+    },
+    {
+      "name": "central_w",
+      "expr": "base_central_w * baby",
+      "comment": "central slab width",
+      "unit": "mm"
+    },
+    {
+      "name": "arm_w",
+      "expr": "base_arm_w * baby",
+      "comment": "each arm's width",
+      "unit": "mm"
+    },
+    {
+      "name": "arm_gap",
+      "expr": "4 mm",
+      "comment": "clearance between central slab and each arm; not scaled",
+      "unit": "mm"
+    },
+    {
+      "name": "total_w",
+      "expr": "central_w + 2 * (arm_w + arm_gap)",
+      "comment": "overall width, derived",
+      "unit": "mm"
+    },
+    {
+      "name": "hinge_z",
+      "expr": "height / 2",
+      "unit": "mm",
+      "comment": "hinge axis height above the floor (A39: through the centre)"
+    },
+    {
+      "name": "arm_offset",
+      "expr": "central_w / 2 + arm_gap + arm_w / 2",
+      "unit": "mm",
+      "comment": "sideways distance from the centre line to each arm's centre, derived"
+    },
+    {
+      "name": "wall_t",
+      "expr": "3 mm",
+      "unit": "mm",
+      "comment": "printed wall thickness (PETG); a first guess, tune when printing"
+    },
+    {
+      "name": "bat_l",
+      "expr": "138 mm",
+      "unit": "mm",
+      "comment": "DXF 4S 5200 mAh: length (stands upright in central)"
+    },
+    {
+      "name": "bat_w",
+      "expr": "47 mm",
+      "unit": "mm",
+      "comment": "DXF 4S 5200 mAh: width"
+    },
+    {
+      "name": "bat_h",
+      "expr": "48.5 mm",
+      "unit": "mm",
+      "comment": "DXF 4S 5200 mAh: height"
+    },
+    {
+      "name": "bat_mass",
+      "expr": "480 g",
+      "unit": "g",
+      "comment": "DXF 4S 5200 mAh: mass (seller: about 480 g +-15)"
+    },
+    {
+      "name": "cam_baseline",
+      "expr": "central_w - 2 * wall_t - 25 mm - 6 mm",
+      "unit": "mm",
+      "comment": "distance between the two cameras' centres; the widest the central slab's front allows (the hand-held rig has 134 mm)"
+    },
+    {
+      "name": "petg_density",
+      "expr": "1.27",
+      "unit": "",
+      "comment": "PETG density in g/cm3 (typical filament datasheet value)"
+    },
+    {
+      "name": "carrier_gap",
+      "expr": "2 mm",
+      "unit": "mm",
+      "comment": "clearance between the carrier box and the inside of the arm sleeve (room for rails)"
+    },
+    {
+      "name": "carrier_d",
+      "expr": "depth - 2 * wall_t - 2 * carrier_gap",
+      "unit": "mm",
+      "comment": "carrier box depth: fits inside the arm sleeve"
+    },
+    {
+      "name": "carrier_w",
+      "expr": "arm_w - 2 * wall_t - 2 * carrier_gap",
+      "unit": "mm",
+      "comment": "carrier box width"
+    },
+    {
+      "name": "carrier_h",
+      "expr": "225 mm",
+      "unit": "mm",
+      "comment": "carrier box height: holds the slide servo, drive pulley and idlers; tall so the rails' bearing span keeps loads on it low (2026-11-06)"
+    },
+    {
+      "name": "hinge_range",
+      "expr": "210 deg",
+      "unit": "deg",
+      "comment": "each hinge turns +-hinge_range: past 180 deg either way, so either end of an arm can be the foot (clockwise and counterclockwise); the slide servo's cable must twist this far"
+    },
+    {
+      "name": "slide_travel",
+      "expr": "height / 2 - wall_t - carrier_h / 2",
+      "unit": "mm",
+      "comment": "how far the sleeve can slide each way before its end wall meets the carrier, derived"
+    }
+  ],
+  "parts": [
+    {
+      "name": "battery",
+      "parent": "central",
+      "size": [
+        "bat_h",
+        "bat_w",
+        "bat_l"
+      ],
+      "centre_x": "0 mm",
+      "centre_y": "0 mm",
+      "bottom_z": "-hinge_z + wall_t",
+      "mass": "bat_mass",
+      "comment": "upright, centred, on the floor of the central slab: lowest centre of mass",
+      "source": "DXF 4S 5200 mAh, Amazon.se B0B9K69TMQ: 138 x 47 x 48.5 mm, about 480 g"
+    },
+    {
+      "name": "pi5",
+      "parent": "central",
+      "size": [
+        "20 mm",
+        "56 mm",
+        "85 mm"
+      ],
+      "centre_x": "-(depth / 2 - wall_t - 20 mm / 2)",
+      "centre_y": "0 mm",
+      "bottom_z": "-hinge_z + wall_t + bat_l + 5 mm",
+      "mass": "50 g",
+      "source": "85 x 56 mm board (retailers); 20 mm with cooler and 50 g are estimates (listings say 45-62 g)",
+      "comment": "upright against the back wall, just above the battery"
+    },
+    {
+      "name": "hinge_servo_left",
+      "parent": "central",
+      "size": [
+        "24.72 mm",
+        "35 mm",
+        "45.22 mm"
+      ],
+      "centre_x": "0 mm",
+      "centre_y": "(central_w / 2 - wall_t - 35 mm / 2)",
+      "bottom_z": "-45.22 mm / 2",
+      "mass": "74.5 g",
+      "source": "STS3250, Feetech store on Alibaba: 45.22 x 24.72 x 35 mm, 74.5 g",
+      "comment": "on the hinge axis, output shaft pointing out along +y"
+    },
+    {
+      "name": "hinge_servo_right",
+      "parent": "central",
+      "size": [
+        "24.72 mm",
+        "35 mm",
+        "45.22 mm"
+      ],
+      "centre_x": "0 mm",
+      "centre_y": "-(central_w / 2 - wall_t - 35 mm / 2)",
+      "bottom_z": "-45.22 mm / 2",
+      "mass": "74.5 g",
+      "source": "STS3250, Feetech store on Alibaba: 45.22 x 24.72 x 35 mm, 74.5 g",
+      "comment": "on the hinge axis, output shaft pointing out along -y"
+    },
+    {
+      "name": "imu",
+      "parent": "central",
+      "size": [
+        "16 mm",
+        "21 mm",
+        "3 mm"
+      ],
+      "centre_x": "0 mm",
+      "centre_y": "0 mm",
+      "bottom_z": "-1.5 mm",
+      "mass": "5 g",
+      "source": "estimate (MPU-6050 breakout, GY-521 size)",
+      "comment": "on the hinge centre, between the hinge servos"
+    },
+    {
+      "name": "bus_board_12v",
+      "parent": "central",
+      "size": [
+        "11.5 mm",
+        "36.6 mm",
+        "55.8 mm"
+      ],
+      "centre_x": "-(depth / 2 - wall_t - 11.5 mm / 2)",
+      "centre_y": "20 mm",
+      "bottom_z": "30 mm",
+      "mass": "12.5 g",
+      "source": "FE-URT-2: 55.8 x 36.6 x 11.5 mm (retailers), 12.5 g",
+      "comment": "back wall, above the Pi; drives the two STS3250 (12 V bus)"
+    },
+    {
+      "name": "bus_board_7v4",
+      "parent": "central",
+      "size": [
+        "11.5 mm",
+        "36.6 mm",
+        "55.8 mm"
+      ],
+      "centre_x": "-(depth / 2 - wall_t - 11.5 mm / 2)",
+      "centre_y": "-20 mm",
+      "bottom_z": "30 mm",
+      "mass": "12.5 g",
+      "source": "FE-URT-2: 55.8 x 36.6 x 11.5 mm (retailers), 12.5 g",
+      "comment": "back wall, above the Pi; drives the two STS3215-C046 (7.4 V bus)"
+    },
+    {
+      "name": "buck_5v",
+      "parent": "central",
+      "size": [
+        "15 mm",
+        "30 mm",
+        "50 mm"
+      ],
+      "centre_x": "-(depth / 2 - wall_t - 15 mm / 2)",
+      "centre_y": "0 mm",
+      "bottom_z": "100 mm",
+      "mass": "40 g",
+      "source": "estimate: the Zorblix page gives no size or weight",
+      "comment": "back wall; 5 V 5 A for the Pi"
+    },
+    {
+      "name": "buck_12v",
+      "parent": "central",
+      "size": [
+        "53 mm",
+        "60 mm",
+        "27 mm"
+      ],
+      "centre_x": "-20 mm",
+      "centre_y": "0 mm",
+      "bottom_z": "160 mm",
+      "mass": "90 g",
+      "source": "DollaTek 300 W 20 A, Amazon.se B083PZDF17: 60 x 53 x 27 mm, 0.09 kg",
+      "comment": "upper central, flat"
+    },
+    {
+      "name": "buck_7v4",
+      "parent": "central",
+      "size": [
+        "53 mm",
+        "60 mm",
+        "27 mm"
+      ],
+      "centre_x": "-20 mm",
+      "centre_y": "0 mm",
+      "bottom_z": "190 mm",
+      "mass": "90 g",
+      "source": "DollaTek 300 W 20 A, Amazon.se B083PZDF17: 60 x 53 x 27 mm, 0.09 kg",
+      "comment": "upper central, flat, above the 12 V one"
+    },
+    {
+      "name": "screen",
+      "parent": "central",
+      "size": [
+        "12 mm",
+        "121 mm",
+        "78 mm"
+      ],
+      "centre_x": "depth / 2 - wall_t - 12 mm / 2",
+      "centre_y": "0 mm",
+      "bottom_z": "95 mm",
+      "mass": "120 g",
+      "source": "121 x 78 mm (Waveshare 5inch HDMI LCD, which the AliExpress listing copies); 12 mm thick and 120 g are estimates",
+      "comment": "the face, behind the front wall"
+    },
+    {
+      "name": "respeaker",
+      "parent": "central",
+      "size": [
+        "9.4 mm",
+        "86 mm",
+        "35 mm"
+      ],
+      "centre_x": "depth / 2 - wall_t - 9.4 mm / 2",
+      "centre_y": "0 mm",
+      "bottom_z": "178 mm",
+      "mass": "21 g",
+      "source": "ReSpeaker Lite: 86 x 35 x 9.4 mm, 21 g (retailers)",
+      "comment": "front, above the screen, mics facing forward"
+    },
+    {
+      "name": "camera_left",
+      "parent": "central",
+      "size": [
+        "10 mm",
+        "25 mm",
+        "24 mm"
+      ],
+      "centre_x": "depth / 2 - wall_t - 10 mm / 2",
+      "centre_y": "cam_baseline / 2",
+      "bottom_z": "218 mm",
+      "mass": "4 g",
+      "source": "estimate (IMX219 module size)",
+      "comment": "eye, top front"
+    },
+    {
+      "name": "camera_right",
+      "parent": "central",
+      "size": [
+        "10 mm",
+        "25 mm",
+        "24 mm"
+      ],
+      "centre_x": "depth / 2 - wall_t - 10 mm / 2",
+      "centre_y": "-cam_baseline / 2",
+      "bottom_z": "218 mm",
+      "mass": "4 g",
+      "source": "estimate (IMX219 module size)",
+      "comment": "eye, top front"
+    },
+    {
+      "name": "slide_servo",
+      "parent": "arm",
+      "size": [
+        "24.7 mm",
+        "35 mm",
+        "45.2 mm"
+      ],
+      "centre_x": "0 mm",
+      "centre_y": "0 mm",
+      "bottom_z": "-45.2 mm / 2",
+      "mass": "55 g",
+      "source": "STS3215(-C046): 45.2 x 24.7 x 35 mm, 55 g (retailers; the C046 weight is the generic STS3215's)",
+      "comment": "in the arm's inner box on the hinge axis; drives the belt (one component, so both arms get one)"
+    }
+  ]
+}
