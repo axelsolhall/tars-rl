@@ -1,0 +1,46 @@
+# tars-rig: wiring and session settings. Edit, then `rig/deploy.sh`.
+# Pins are BCM GPIO numbers (GPIO17 is header pin 11). See rig/README.md for the wiring table.
+
+[pins]
+button = 17       # momentary button to GND (pin 9); internal pull-up
+led_green = 22    # bicolour LED, 330 ohm per leg, common cathode to GND (pin 14)
+led_red = 27      # set both LED pins to -1 to use the Pi's own green ACT LED instead
+led_common_anode = false  # true if the LED's common leg goes to 3.3 V (pin 17) instead of GND
+
+[imu]
+bus = 1
+address = 0x68
+rate_hz = 200
+accel_range_g = 4       # 2, 4, 8 or 16
+gyro_range_dps = 500    # 250, 500, 1000 or 2000
+dlpf = 3                # digital low-pass: 3 = 44 Hz accel / 42 Hz gyro
+poll_ms = 20            # FIFO read interval; the FIFO holds ~0.2 s (MPU6500, 512 B) or ~0.4 s (MPU6050) at 200 Hz
+
+[cameras]
+width = 1640            # IMX219 2x2-binned full field of view; every session uses this one mode
+height = 1232
+fps = 30
+jpeg_quality = 90       # grayscale JPEG (the luma plane); SLAM and calibration only need gray
+sync = true             # libcamera software sync: camera 0 server, camera 1 client
+meter_seconds = 1.5     # auto-exposure runs this long on camera 0, then both cameras lock to its values
+max_exposure_us = 6000  # cap to keep motion blur and rolling-shutter skew down; gain makes up the rest
+max_gain = 8.0
+queue_frames = 45       # encoder backlog (1.5 s, ~90 MB per camera) before a frame is dropped
+
+[sessions.calibrate]
+cameras = true
+imu = true              # still/moving detection for frame selection, and camera-IMU calibration
+max_minutes = 5
+
+[sessions.imu]
+cameras = false
+imu = true
+max_minutes = 120
+
+[sessions.capture]
+cameras = true
+imu = true
+max_minutes = 20
+
+[storage]
+root = "/data"          # the container's mount of /srv/rig on the Pi

@@ -1,0 +1,6 @@
+**/__pycache__
+**/*.pyc
+tests
+README.md
+deploy.sh
+pi_setup.sh

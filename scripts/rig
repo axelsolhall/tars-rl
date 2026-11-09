@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# The rig from the Mac. Most commands run inside the Pi's container over SSH; a few run here.
+#
+#   scripts/rig arm calibrate|imu|capture | disarm | start | stop | status | list
+#   scripts/rig find-button | imu-test | cam-test      wiring checks, on the Pi
+#   scripts/rig deploy [--force|--build]              rig/deploy.sh
+#   scripts/rig pull                                  copy sessions to runs/rig/ on the Mac
+#   scripts/rig check <session dir>                   the session eval, here on the Mac
+#   scripts/rig export <session dir> <out> [--scale]  EuRoC layout for SLAM and calibration tools
+#   scripts/rig logs | shell                          the container's log, or a shell in it
+set -euo pipefail
+
+HOST=${RIG_HOST:-axel@tars-rig.local}
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+
+case ${1:-status} in
+  deploy) shift; exec "$REPO/rig/deploy.sh" "$@" ;;
+  pull) mkdir -p "$REPO/runs/rig"; exec rsync -av "$HOST:/srv/rig/sessions/" "$REPO/runs/rig/" ;;
+  check) shift; PYTHONPATH="$REPO/rig/src" exec "$REPO/.venv/bin/python" -m tars_rig check "$@" ;;
+  export) shift; PYTHONPATH="$REPO/rig/src" exec "$REPO/.venv/bin/python" -m tars_scan.export "$@" ;;
+  logs) exec ssh "$HOST" docker logs -f --tail 100 tars-rig ;;
+  shell) exec ssh -t "$HOST" docker exec -it tars-rig bash ;;
+  *) exec ssh -t "$HOST" docker exec -t tars-rig rig "$@" ;;
+esac

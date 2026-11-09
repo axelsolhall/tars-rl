@@ -73,6 +73,22 @@ Already owned: Raspberry Pi 5, 2 × IMX219 camera, 2 × DXF 4S 5200 mAh 60C LiPo
 
 Not yet priced: XT60 connectors, main switch, fuse, LiPo voltage alarm, 12 mm axle tube (Amazon.se lists 304 stainless 12 × 1 mm in 250/300 mm and 12 × 10 mm carbon tubes; buy 300 mm and cut; prices not yet checked on the pages), 12 mm shaft collars, PTFE film (0.3 mm sheet seen at 137 kr, unchecked) for the slide pads, smooth GT2 idlers (5 for 118.43 kr seen on Amazon.se, bore not yet checked).
 
+### Screws, nuts and sheet for the arm mechanism (from the CAD, not yet priced)
+
+Counts are for the whole robot: two hinge drives (one per arm) and one centre axle clamp (two mirrored halves).
+An M2 + M3 socket-head assortment with nuts covers all of it.
+
+| part | qty | used for |
+|---|---|---|
+| M2×10 socket head | 8 | servo sleeve to the servo's back holes (4 per sleeve) |
+| M3×16 socket head | 4 | axle clamp top to bottom (2 per half), into a pilot hole |
+| M3×20 socket head | 4 | bearing cap to the sleeve (2 per cap) |
+| M3×30 socket head | 4 | belt tension jack screws (2 per side); 30 mm gives ~6 mm of tension travel |
+| M3 hex nut, DIN 934 (or nylon lock nut DIN 985, 4 mm tall: set `m3_nut_h` to 4 mm) | 4 | sunk into the clamp bottom under the jack screws |
+| M3 screws, pulley to servo horn | 2 × the pulley's holes | length not yet checked |
+| 1 mm steel sheet, cut by hand | 2 plates of 28 × 10 mm | tension plates on the sleeve tops, under the jack screw tips |
+| Turmberg3D GT2 closed belt, 10 mm wide, 218 mm (109 teeth), fibreglass cord, pack of 2: 108.85 kr, [Amazon.se B09B2FGTN7](https://www.amazon.se/dp/B09B2FGTN7) (checked 2026-11-08) | **ordered 2026-11-08**: 2 packs = 4 belts (2 spares), delivery est. 17 Nov | hinge belts; 49.0 mm centre distance, inside the 47.4–56 mm the rails and jack screws allow. No published load rating (Gates 9 mm: 6.8 N·m at 60T) |
+
 **Total ≈ 3,000 kr** before possible VAT on the Alibaba order (≈ 330 kr).
 
 ## Rejected after checking prices
