@@ -37,7 +37,7 @@ def _video_config(picam2, cfg: CameraConfig, controls: dict):
     )
 
 
-def meter_exposure(cfg: CameraConfig) -> tuple[int, float]:
+def meter_exposure(cfg: CameraConfig, max_exposure_us: int | None = None) -> tuple[int, float]:
     """Run auto-exposure on camera 0 for meter_seconds, then cap exposure with gain.
 
     The cap limits motion blur and rolling-shutter smear."""
@@ -53,8 +53,9 @@ def meter_exposure(cfg: CameraConfig) -> tuple[int, float]:
         md = picam2.capture_metadata()
         picam2.stop()
     exposure, gain = int(md["ExposureTime"]), float(md["AnalogueGain"])
-    if exposure > cfg.max_exposure_us:
-        gain, exposure = gain * exposure / cfg.max_exposure_us, cfg.max_exposure_us
+    cap = max_exposure_us or cfg.max_exposure_us
+    if exposure > cap:
+        gain, exposure = gain * exposure / cap, cap
     gain = min(gain, cfg.max_gain)
     log.info("metered exposure %d us, gain %.2f", exposure, gain)
     return exposure, gain

@@ -1,6 +1,6 @@
 """Calibrate a rig session's stereo pair from a checkerboard film, most valuable frames first.
 
-  python -m tars_scan.calib <session> --board 9x6 --square-mm 25 [--budget 80] [--max-px 2]
+  python -m tars_scan.calib <session> [--board 10x7 --square-mm 25.03] [--budget 160] [--max-px 2]
 
 Steps (tars_scan.select has the reasoning and select_eval the measured trade-offs):
 1. Value each left frame by its predicted smear from the gyro (no decoding). Without IMU data,
@@ -76,6 +76,9 @@ def detect(jpeg: bytes, board: tuple[int, int]) -> np.ndarray | None:
     from .export import _decode
 
     img = _decode(jpeg, 1.0)
+    # Stretch to the full range: the first real session was ~4x underexposed (max ~50 of 255) and
+    # the detector missed every board. A linear stretch keeps the corner positions unchanged.
+    img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
     ok, corners = cv2.findChessboardCornersSB(img, board, flags=cv2.CALIB_CB_ACCURACY)
     return corners.reshape(-1, 2).astype(np.float64) if ok else None
 
@@ -88,7 +91,6 @@ def board_points(board: tuple[int, int], square_m: float) -> np.ndarray:
 def calibrate_session(
     session: Path, board: tuple[int, int], square_m: float, budget: int, max_px: float, stride: int
 ) -> dict:
-    import cv2
 
     meta = read_json(session / "meta.json")
     cams = meta["cameras"]
@@ -110,8 +112,13 @@ def calibrate_session(
 
     t0 = time.perf_counter()
     obj = board_points(board, square_m)
-    found: dict[int, dict[int, np.ndarray]] = {0: {}, 1: {}}
-    for cam, rows in ((0, left), (1, right)):
+    out = session / "calib"
+    out.mkdir(exist_ok=True)
+    cache = out / "detections.npz"
+    found = load_detections(cache, board, max_px, stride)
+    searching = found is None
+    found = found or {0: {}, 1: {}}
+    for cam, rows in ((0, left), (1, right)) if searching else ():
         f = frames[cam]
         wanted = [
             (int(f["index"][rows[n]]), int(f["offset"][rows[n]]), int(f["size"][rows[n]]))
@@ -122,6 +129,8 @@ def calibrate_session(
             corners = detect(jpg, board)
             if corners is not None:
                 found[cam][index_to_pair[index]] = corners
+    if searching:
+        save_detections(cache, found, board, max_px, stride)
     search_s = time.perf_counter() - t0
 
     report: dict = {
@@ -155,33 +164,117 @@ def calibrate_session(
         )
     both = sorted(set(found[0]) & set(found[1]))
     if len(both) >= 5:
-        objs = [obj.reshape(1, -1, 3).astype(np.float64) for _ in both]
-        img0 = [found[0][k].reshape(1, -1, 2) for k in both]
-        img1 = [found[1][k].reshape(1, -1, 2) for k in both]
-        rms, *_, R, T = cv2.fisheye.stereoCalibrate(
-            objs,
-            img0,
-            img1,
-            results[0]["K"],
-            results[0]["D"].reshape(4, 1),
-            results[1]["K"],
-            results[1]["D"].reshape(4, 1),
-            (w, h),
-            flags=cv2.CALIB_FIX_INTRINSIC,
-            criteria=(cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 100, 1e-9),
-        )[:7]
-        report["stereo"] = {
-            "views": len(both),
-            "rms_px": round(float(rms), 4),
-            "R": np.round(R, 6).tolist(),
-            "T_m": np.round(np.ravel(T), 5).tolist(),
-            "baseline_m": round(float(np.linalg.norm(T)), 5),
-        }
-    out = session / "calib"
-    out.mkdir(exist_ok=True)
+        report["stereo"] = stereo_extrinsics(
+            obj,
+            [found[0][k] for k in both],
+            [found[1][k] for k in both],
+            (results[0]["K"], results[0]["D"]),
+            (results[1]["K"], results[1]["D"]),
+        )
     (out / "calib.json").write_text(json.dumps(report, indent=2))
     (out / "camchain.yaml").write_text(camchain_yaml(report, (w, h)))
     return report
+
+
+def save_detections(path: Path, found: dict, board, max_px: float, stride: int) -> None:
+    """The board search is the slow part (minutes); keep its result so refits are instant."""
+    arrays = {"params": np.array([*board, max_px, stride], dtype=float)}
+    for cam in (0, 1):
+        keys = sorted(found[cam])
+        arrays[f"keys{cam}"] = np.array(keys, dtype=int)
+        arrays[f"corners{cam}"] = np.array([found[cam][k] for k in keys]).reshape(len(keys), -1, 2)
+    np.savez_compressed(path, **arrays)
+
+
+def load_detections(path: Path, board, max_px: float, stride: int) -> dict | None:
+    if not path.exists():
+        return None
+    z = np.load(path)
+    if not np.allclose(z["params"], [*board, max_px, stride]):
+        return None
+    return {
+        cam: {int(k): c for k, c in zip(z[f"keys{cam}"], z[f"corners{cam}"], strict=True)}
+        for cam in (0, 1)
+    }
+
+
+def stereo_extrinsics(obj, img0: list, img1: list, cam0, cam1, max_views: int = 80) -> dict:
+    """The cam0 -> cam1 pose (X1 = R X0 + T) at fixed intrinsics.
+
+    Each view's board pose in each camera gives one relative pose; their median is a robust start
+    and drops views that disagree (cv2.fisheye.stereoCalibrate aborted on the first real session
+    with an ill-conditioned-view assertion). Then one joint least squares over both cameras'
+    reprojection refines it, the same objective stereoCalibrate minimises."""
+    import cv2
+    from scipy.optimize import least_squares
+    from scipy.sparse import lil_matrix
+
+    (K0, D0), (K1, D1) = cam0, cam1
+    D0, D1 = D0.reshape(4, 1), D1.reshape(4, 1)
+    o = obj.reshape(1, -1, 3).astype(np.float64)
+    rel, start = [], []
+    for c0, c1 in zip(img0, img1, strict=True):
+        ok0, r0, t0 = cv2.fisheye.solvePnP(o, c0.reshape(1, -1, 2), K0, D0)
+        ok1, r1, t1 = cv2.fisheye.solvePnP(o, c1.reshape(1, -1, 2), K1, D1)
+        if not (ok0 and ok1):
+            rel.append(None)
+            continue
+        R0, R1 = cv2.Rodrigues(r0)[0], cv2.Rodrigues(r1)[0]
+        R = R1 @ R0.T
+        rel.append((R, np.ravel(t1) - R @ np.ravel(t0)))
+        start.append((np.ravel(r0), np.ravel(t0)))
+    good = [k for k, r in enumerate(rel) if r is not None]
+    Ts = np.array([rel[k][1] for k in good])
+    T_med = np.median(Ts, axis=0)
+    dev = np.linalg.norm(Ts - T_med, axis=1)
+    inl = [good[i] for i in np.flatnonzero(dev <= max(3 * np.median(dev), 0.002))]
+    U, _, Vt = np.linalg.svd(sum(rel[k][0] for k in inl))
+    R_start = U @ np.diag([1, 1, np.linalg.det(U @ Vt)]) @ Vt
+    use = [inl[i] for i in np.linspace(0, len(inl) - 1, min(max_views, len(inl))).astype(int)]
+    pose0 = {k: p for k, p in zip(good, start, strict=True)}
+
+    n_pts = o.shape[1]
+
+    def resid(x):
+        R = cv2.Rodrigues(x[:3])[0]
+        out = []
+        for v, k in enumerate(use):
+            rk, tk = x[6 + 6 * v : 9 + 6 * v], x[9 + 6 * v : 12 + 6 * v]
+            p0 = cv2.fisheye.projectPoints(o, rk, tk, K0, D0)[0].reshape(-1, 2)
+            R1 = R @ cv2.Rodrigues(rk)[0]
+            p1 = cv2.fisheye.projectPoints(o, cv2.Rodrigues(R1)[0], R @ tk + x[3:6], K1, D1)[
+                0
+            ].reshape(-1, 2)
+            out += [(p0 - img0[k]).ravel(), (p1 - img1[k]).ravel()]
+        return np.concatenate(out)
+
+    x0 = np.concatenate([cv2.Rodrigues(R_start)[0].ravel(), T_med, *[np.r_[pose0[k]] for k in use]])
+    sparsity = lil_matrix((4 * n_pts * len(use), len(x0)), dtype=int)
+    for v in range(len(use)):
+        rows = slice(4 * n_pts * v, 4 * n_pts * (v + 1))
+        sparsity[rows, :6] = 1
+        sparsity[rows, 6 + 6 * v : 12 + 6 * v] = 1
+    fit = least_squares(
+        resid, x0, jac_sparsity=sparsity, loss="huber", f_scale=1.0, x_scale="jac", max_nfev=200
+    )
+    R, T = cv2.Rodrigues(fit.x[:3])[0], fit.x[3:6]
+    err = fit.fun.reshape(len(use), 2, n_pts, 2)
+    c1 = -R.T @ T  # where the second lens sits, in camera 0's frame (x right, y down, z forward)
+    return {
+        "views_common": len(img0),
+        "views_agreeing": len(inl),
+        "views_used": len(use),
+        "rms_px": [round(float(np.sqrt(np.mean(err[:, c] ** 2))), 4) for c in (0, 1)],
+        "R": np.round(R, 6).tolist(),
+        "T_m": np.round(T, 5).tolist(),
+        "baseline_m": round(float(np.linalg.norm(T)), 5),
+        "cam1_in_cam0_mm": np.round(c1 * 1000, 2).tolist(),
+        "rotation_deg": round(float(np.degrees(np.linalg.norm(fit.x[:3]))), 3),
+        # How much single views disagree on the baseline: a sanity check, not the error of the fit.
+        "per_view_baseline_mm_std": round(
+            float(np.std([np.linalg.norm(rel[k][1]) for k in inl]) * 1000), 2
+        ),
+    }
 
 
 def camchain_yaml(report: dict, size: tuple[int, int]) -> str:
@@ -210,8 +303,9 @@ def camchain_yaml(report: dict, size: tuple[int, int]) -> str:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="tars_scan.calib", description=__doc__.split("\n")[0])
     p.add_argument("session", type=Path)
-    p.add_argument("--board", default="9x6", help="inner corners, 9x6 for 10x7 squares (A158)")
-    p.add_argument("--square-mm", type=float, required=True, help="measured square size")
+    # Axel's board, measured 2026-11-09: 11x8 squares, 11 squares = 275.3 mm (8 = ~200 mm).
+    p.add_argument("--board", default="10x7", help="inner corners: 10x7 for 11x8 squares")
+    p.add_argument("--square-mm", type=float, default=25.03, help="measured square size")
     # Defaults from select_eval (A157).
     p.add_argument("--budget", type=int, default=160, help="views per camera to calibrate on")
     p.add_argument("--max-px", type=float, default=2.0, help="largest predicted smear to search")

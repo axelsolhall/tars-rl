@@ -22,9 +22,9 @@ Header pin numbers are physical pins. Hold the Pi with the SD card pointing up: 
 |---|---|---|---|
 | Button | one side | pin 11 (GPIO17) | internal pull-up, no resistor |
 | Button | other side | pin 9 (GND) | |
-| LED | green leg | 330 Ω → pin 15 (GPIO22) | |
-| LED | red leg | 330 Ω → pin 13 (GPIO27) | |
-| LED | common leg | pin 14 (GND) | if it is common anode, use pin 17 (3.3 V) and set `led_common_anode = true` |
+| LED | green (anode, long leg) | 330 Ω → pin 13 (GPIO27) | two separate LEDs or one bicolour; the pins are `led_green` / `led_red` in `config.toml` |
+| LED | red (anode, long leg) | 330 Ω → pin 15 (GPIO22) | |
+| LED | cathodes (short legs) | pin 14 (GND) | if it is common anode, use pin 17 (3.3 V) and set `led_common_anode = true` |
 | MPU6050 | VCC | pin 1 (**3.3 V**) | never 5 V: the GY-521's I2C pull-ups go to VCC, and the Pi's pins take 3.3 V only |
 | MPU6050 | GND | pin 6 | |
 | MPU6050 | SDA | pin 3 (GPIO2) | |
@@ -89,7 +89,7 @@ with known faults. The tests run with the main suite (`pytest`).
 
 ```
 scripts/rig export runs/rig/<session> runs/rig/<session>-euroc [--scale 0.5]
-PYTHONPATH=rig/src .venv/bin/python -m tars_scan.calib runs/rig/<session> --square-mm <measured>
+PYTHONPATH=rig/src .venv/bin/python -m tars_scan.calib runs/rig/<session>   # board: 11x8 squares of 25.03 mm
 PYTHONPATH=rig/src .venv/bin/python -m tars_scan.select_eval     # the selection eval
 ```
 

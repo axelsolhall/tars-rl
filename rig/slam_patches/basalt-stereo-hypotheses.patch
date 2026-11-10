@@ -1,0 +1,99 @@
+diff --git a/include/basalt/optical_flow/frame_to_frame_optical_flow.h b/include/basalt/optical_flow/frame_to_frame_optical_flow.h
+index 87675bd..b85977c 100644
+--- a/include/basalt/optical_flow/frame_to_frame_optical_flow.h
++++ b/include/basalt/optical_flow/frame_to_frame_optical_flow.h
+@@ -35,7 +35,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ #pragma once
+ 
++#include <cstdlib>
+ #include <memory>
++#include <sstream>
++#include <string>
++#include <vector>
+ 
+ #include <sophus/se2.hpp>
+ #include "basalt/imu/imu_types.h"
+@@ -56,6 +60,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ namespace basalt {
+ 
++// TARS: settings for multi-hypothesis stereo matching, read from the environment so the stock
++// config files stay valid. TARS_STEREO_DEPTHS="0.25,0.5,1,2" (metres) turns it on.
++inline std::vector<double> tarsEnvList(const char* name) {
++  std::vector<double> out;
++  const char* s = std::getenv(name);
++  if (!s) return out;
++  std::stringstream ss(s);
++  std::string item;
++  while (std::getline(ss, item, ',')) out.push_back(std::stod(item));
++  return out;
++}
++
++inline double tarsEnvScalar(const char* name, double fallback) {
++  const char* s = std::getenv(name);
++  return s ? std::stod(s) : fallback;
++}
++
+ /// Unlike PatchOpticalFlow, FrameToFrameOpticalFlow always tracks patches
+ /// against the previous frame, not the initial frame where a track was created.
+ /// While it might cause more drift of the patch location, it leads to longer
+@@ -98,6 +119,12 @@ class FrameToFrameOpticalFlow final : public OpticalFlowTyped<Scalar, Pattern> {
+   using OpticalFlowBase::pyramid;
+   using OpticalFlowBase::show_gui;
+   using OpticalFlowBase::t_ns;
++
++  // TARS: multi-hypothesis stereo matching (see trackPoints; tars-rl loopdesk A165, A166). A point is dropped when a match
++  // more than tars_distinct_px away has a residual below tars_ambiguity * the best one.
++  const std::vector<double> tars_depths = tarsEnvList("TARS_STEREO_DEPTHS");
++  const Scalar tars_ambiguity = tarsEnvScalar("TARS_STEREO_AMBIGUITY", 1.3);
++  const Scalar tars_distinct_px = tarsEnvScalar("TARS_STEREO_DISTINCT_PX", 2.0);
+   using OpticalFlowBase::transforms;
+ 
+   FrameToFrameOpticalFlow(const VioConfig& conf, const Calibration<double>& cal)
+@@ -328,6 +355,45 @@ class FrameToFrameOpticalFlow final : public OpticalFlowTyped<Scalar, Pattern> {
+ 
+         if (masks1.inBounds(t1.x(), t1.y())) continue;
+ 
++        // TARS: stereo matching from several depth hypotheses instead of one depth guess. One guess
++        // lets KLT settle on a neighbouring corner of repeating texture (the calibration board),
++        // which gives a consistent wrong disparity and a wrong map scale for minutes.
++        if (matching && !tars_depths.empty()) {
++          std::vector<std::pair<Eigen::AffineCompact2f, Scalar>> sols;
++          for (const double d : tars_depths) {
++            Vector2 g;
++            Scalar _;
++            if (!calib.projectBetweenCams(Vector2(t1.template cast<Scalar>()), Scalar(d), g, _, T_c1_c2, cam1, cam2))
++              continue;
++            if (!(g(0) >= 0 && g(1) >= 0 && g(0) < w && g(1) < h)) continue;
++            Eigen::AffineCompact2f tf2 = transform_1;
++            tf2.translation() = g.template cast<float>();
++            if (!trackPoint(pyr_1, pyr_2, transform_1, tf2)) continue;
++            if (masks2.inBounds(tf2.translation().x(), tf2.translation().y())) continue;
++            Eigen::AffineCompact2f back = tf2;
++            back.translation() += t1 - g.template cast<float>();
++            if (!trackPoint(pyr_2, pyr_1, tf2, back)) continue;
++            if ((t1 - back.translation()).squaredNorm() >= config.optical_flow_max_recovered_dist2) continue;
++            PatchT p(pyr_1.lvl(0), t1);
++            if (!p.valid) continue;
++            typename PatchT::Matrix2P pat = (transform_1.linear().inverse() * tf2.linear()).matrix() * PatchT::pattern2;
++            pat.colwise() += tf2.translation();
++            typename PatchT::VectorP res;
++            if (!p.residual(pyr_2.lvl(0), pat, res)) continue;
++            sols.emplace_back(tf2, res.norm());
++          }
++          if (sols.empty()) continue;
++          size_t best = 0;
++          for (size_t k = 1; k < sols.size(); k++)
++            if (sols[k].second < sols[best].second) best = k;
++          bool ambiguous = false;
++          for (const auto& [tf, err] : sols)
++            ambiguous |= (tf.translation() - sols[best].first.translation()).norm() > tars_distinct_px &&
++                         err < tars_ambiguity * sols[best].second;
++          if (!ambiguous) result[id] = sols[best].first;
++          continue;
++        }
++
+         bool valid = true;
+ 
+         Eigen::Vector2f off{0, 0};

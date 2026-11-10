@@ -1,5 +1,5 @@
 """Status light: green = armed, blinking green = recording, red = error, red flashes = pressed with
-nothing armed.
+nothing armed, or the next phase of a scripted session.
 
 GpioLeds drives the red/green LED on two header pins; ActLed falls back to the Pi's own green LED
 (no red, so errors show as fast blinking); NullLeds is for tests and the Mac.
@@ -7,9 +7,10 @@ GpioLeds drives the red/green LED on two header pins; ActLed falls back to the P
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-STATES = ("off", "armed", "recording", "error", "refused")
+STATES = ("off", "armed", "recording", "error", "refused", "phase")
 
 
 class NullLeds:
@@ -42,7 +43,16 @@ class GpioLeds:
         elif state == "error":
             r.on()
         elif state == "refused":
-            r.blink(on_time=0.15, off_time=0.15, n=3)
+            # Blocks (~0.9 s) so the daemon's next show() (idle) cannot cut the flashes short.
+            r.blink(on_time=0.15, off_time=0.15, n=3, background=False)
+        elif state == "phase":
+            # Solid red 3 s, then 3 slow flashes (~5 s, blocking): three quick flashes were easy to
+            # miss while watching the board (2026-11-10).
+            r.on()
+            time.sleep(3.0)
+            r.off()
+            time.sleep(0.3)
+            r.blink(on_time=0.3, off_time=0.3, n=3, background=False)
 
 
 class ActLed:
@@ -63,3 +73,5 @@ class ActLed:
             on = "250" if state == "recording" else "60"
             self._write("delay_on", on)
             self._write("delay_off", on)
+            if state in ("refused", "phase"):  # a transient: hold it before the daemon moves on
+                time.sleep(5.0 if state == "phase" else 0.9)

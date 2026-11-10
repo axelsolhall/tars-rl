@@ -97,5 +97,8 @@ def test_calibration_recovers_lens_and_baseline(session):
             K[[0, 1, 0, 1], [0, 1, 2, 2]], abs=1.0
         )
     assert r["stereo"]["baseline_m"] == pytest.approx(0.06, abs=0.001)
+    # Axel's check on the real rig: the lenses sit side by side at the same depth.
+    x, y, z = r["stereo"]["cam1_in_cam0_mm"]
+    assert abs(x) == pytest.approx(60, abs=1) and abs(y) < 1 and abs(z) < 1
     assert all(c["heldout_rms_px"] < 0.3 for c in r["cameras"])
     assert (session / "calib" / "camchain.yaml").read_text().count("T_cn_cnm1") == 1

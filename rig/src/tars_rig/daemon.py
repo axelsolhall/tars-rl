@@ -71,6 +71,11 @@ class Rig:
         return self.thread is not None and self.thread.is_alive()
 
     def handle(self, action: str) -> None:
+        if action == "phase":
+            if self.recording:
+                self.leds.show("phase")
+                self.leds.show("recording")
+            return
         if action == "stop" or (action == "press" and self.recording):
             if self.recording:
                 log.info("stop requested")
@@ -99,7 +104,9 @@ class Rig:
 
     def _run(self, mode: str, stop: threading.Event) -> None:
         try:
-            self.last = self.runner(self.cfg, mode, stop)
+            self.last = self.runner(
+                self.cfg, mode, stop, on_phase=lambda name: self.events.put("phase")
+            )
         except Exception as e:  # noqa: BLE001
             log.exception("session crashed")
             self.last = {"stop_reason": "crashed", "errors": [repr(e)]}

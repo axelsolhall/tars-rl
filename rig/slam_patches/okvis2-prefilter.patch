@@ -1,0 +1,65 @@
+diff --git a/okvis_multisensor_processing/src/ThreadedSlam.cpp b/okvis_multisensor_processing/src/ThreadedSlam.cpp
+index 28db841..a1d1d6b 100644
+--- a/okvis_multisensor_processing/src/ThreadedSlam.cpp
++++ b/okvis_multisensor_processing/src/ThreadedSlam.cpp
+@@ -28,6 +28,9 @@
+ #include <glog/logging.h>
+ 
+ #include <okvis/ThreadedSlam.hpp>
++#include <cstdlib>
++#include <sstream>
++#include <opencv2/imgproc.hpp>
+ #include <okvis/assert_macros.hpp>
+ #include <okvis/ceres/ImuError.hpp>
+ #include <okvis/LidarMotionUndistortion.hpp>
+@@ -424,6 +427,41 @@ void ThreadedSlam::setBlocking(bool blocking)
+   }
+ }
+ 
++// TARS rig experiment: optional image prefilter before detection/matching, chosen with the
++// environment variable TARS_PREFILTER so variants run without rebuilding:
++//   clahe:<clip>:<tiles>   contrast-limited histogram equalisation
++//   dog:<hi>:<lo>          difference of Gaussians (keeps detail between ~hi and ~lo px),
++//                          rescaled to a fixed std around 128 so Harris thresholds stay meaningful
++// Unset or anything else = the raw image (upstream behaviour).
++static cv::Mat tarsPrefilter(const cv::Mat& img) {
++  static const std::string spec = [] {
++    const char* e = std::getenv("TARS_PREFILTER");
++    return std::string(e ? e : "");
++  }();
++  if (img.empty() || spec.empty() || img.type() != CV_8UC1) return img;
++  std::vector<std::string> f;
++  std::stringstream ss(spec);
++  for (std::string t; std::getline(ss, t, ':');) f.push_back(t);
++  if (f[0] == "clahe" && f.size() == 3) {
++    cv::Mat out;
++    cv::createCLAHE(std::stod(f[1]), cv::Size(std::stoi(f[2]), std::stoi(f[2])))->apply(img, out);
++    return out;
++  }
++  if (f[0] == "dog" && f.size() == 3) {
++    cv::Mat a, b, d;
++    img.convertTo(a, CV_32F);
++    cv::GaussianBlur(a, b, cv::Size(0, 0), std::stod(f[1]));
++    cv::GaussianBlur(a, a, cv::Size(0, 0), std::stod(f[2]));
++    d = b - a;
++    cv::Scalar mean, sd;
++    cv::meanStdDev(d, mean, sd);
++    cv::Mat out;
++    d.convertTo(out, CV_8U, 40.0 / (sd[0] + 1e-6), 128.0);
++    return out;
++  }
++  return img;
++}
++
+ bool ThreadedSlam::getNextFrame(MultiFramePtr &multiFrame) {
+   std::vector<okvis::CameraMeasurement> frames;
+   if(!cameraMeasurementsReceived_.getCopyOfFront(&frames)) {
+@@ -434,7 +472,7 @@ bool ThreadedSlam::getNextFrame(MultiFramePtr &multiFrame) {
+   bool success = false;
+   for(size_t im = 0; im < numCameras; ++im)
+   {
+-    cv::Mat filtered = frames.at(im).measurement.image;
++    cv::Mat filtered = tarsPrefilter(frames.at(im).measurement.image);
+     if(!filtered.empty()) {
+       success = true; // require at least one image, depth-only is not considered a success.
+     }

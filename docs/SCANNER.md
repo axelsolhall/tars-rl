@@ -165,3 +165,123 @@ within 0.1 px, held-out reprojection error was 0.09–0.11 px, and the baseline 
    sensor value), then a SLAM sweep with the held-out half of the room for scoring.
 4. **Feature budget for TARS:** equal-area bucketing plus Max-logDet selection inside the chosen
    SLAM. Accuracy vs CPU, measured at 1, 1/2 and 1/4 resolution.
+
+## 6. First real data and first SLAM runs (2026-11-09)
+
+**Calibration film** `20261109-181853-calibrate`: three scripted phases (60 s move-pause, 45 s
+tilts, 45 s sweep), board 11x8 squares of 25.03 mm, frames about 4-6x underexposed in a dim room.
+
+- **Lens and stereo** (`tars_scan.calib`): held-out 0.37-0.41 px. The right lens sits 138.9 mm
+  from the left (Axel's ruler: 138 mm). The "3.7 mm depth" is camera 0 yawed 1.5 deg, not a lens
+  offset. Value-first (566 frames searched, 1 min) vs every frame (4499, 25 min): same held-out
+  error, but the brute-force baseline came out 146.9 mm, because frames taken while moving carry
+  rolling-shutter distortion. Weakness: the board only reached ~32 deg off-axis (lens covers ~60).
+- **Camera-IMU** (`tars_scan.camimu`, A159): gyro vs board-derived rotation rate over 5-frame
+  windows, correlation 0.985. IMU clock = camera clock + 6.7 ms (halves 6.3 / 7.0 ms); the IMU is
+  turned 135 deg about camera 0's y axis (halves agree within 0.3 deg); gyro bias matches the still
+  desk measurement; lever arm ~7 cm (weakest estimate). Synthetic test in `rig/tests`.
+- **Ground truth** (`tars_scan.slam_eval`, A160): camera 0 pose from the board in 3332 frames. The
+  detector sometimes numbers the corners from the far end (180 deg flips, up to 32 cm jumps); poses
+  are chained by temporal continuity, after which the largest frame-to-frame step is 4 deg / 26 mm.
+
+**Basalt** (maintained mateosss fork, Hilti 2026 config, `tars_scan.slam_run`), ATE after rigid
+alignment, RPE over 1 s. Runs are deterministic on one machine; the same binary on the Pi differed
+by ~15% ATE, so differences below ~20% on one film are not meaningful.
+
+| Variant | ATE mm | RPE 1 s | Time for the 147 s film |
+|---|---|---|---|
+| half res (820x616) | 444 | 116 mm, 2.7 deg | 41 s Mac VM |
+| half res, visual only | 523 | 176 mm, 8.7 deg | 40 s |
+| half res, 33 deg mask | 405 | 118 mm, 2.7 deg | |
+| half res, IMU noise x4 | 285 | 187 mm, 1.4 deg | |
+| **half res + rolling-shutter correction** (`tars_scan.rs_correct`) | **175** | 87 mm, 1.1 deg | |
+| same, on the Pi 5 | 202 | 83 mm, 1.1 deg | **58 s on the Pi 5 (2.5x real time), 47 C** |
+| full res (1640x1232) | 124 | 73 mm, 1.3 deg | 128 s Mac VM |
+| full res + rolling-shutter correction | 119 | 71 mm, 1.2 deg | 135 s Mac VM |
+| ORB-SLAM3 stereo-inertial, half and full res (FAST 8/4, 2000 features) | failed | hundreds of map resets: 20-30 points per new map | |
+
+What it says:
+- **Real-time on TARS's computer is possible**: half-resolution Basalt runs 2.5x faster than real
+  time on the Pi 5, including PNG decoding from the SD card.
+- **Rolling-shutter correction is the first rig-specific gain**: 2.5x lower ATE at half
+  resolution. On the board, it lowers the corner fit error only when turning fast (>1 rad/s: 0.42
+  -> 0.37 px) and leaves still frames unchanged, as it should.
+- **At full resolution the correction is within noise** (124 -> 119 mm); it matters where tracking
+  is fragile, which is the half resolution the Pi can afford live. Full res is ~3x the compute.
+- **ORB-SLAM3 could not track this film**: too few ORB corners in dark, gain-boosted frames (Basalt
+  tracks patches, which copes). Retest on a lit room sweep before ruling it out; a config mismatch
+  is not excluded yet.
+- **The film is a hard, small test**: dark, ~1 m of motion around one board. A room sweep with
+  better light is the next data; the ranking needs more than one film.
+
+## 7. All candidates on the same film, and the first custom gain (2026-11-10)
+
+Same film, half resolution + rolling-shutter correction, same score. RPE pairs now take the frame
+nearest to 1 s later (before: first frame after, which dropped every pair on frame-skipped runs).
+
+| System / variant | ATE mm | RPE 1 s | Speed |
+|---|---|---|---|
+| **Basalt + stereo depth hypotheses** (our patch, 9 depths) | **11** | **5 mm, 0.6 deg** | Pi 5: 84 s for 147 s (1.75x real time) |
+| same, 6 depths | 11 | 6 mm, 0.7 deg | **Pi 5: 75 s (1.97x real time)** |
+| Basalt stock (depth guess 2 m) | 175 (Pi: 170) | 85 mm, 1.1 deg | Pi 5: 60 s (2.45x) |
+| Basalt stock, depth guess hand-set to the board's 0.5 m | 6 | 5 mm, 0.6 deg | (tuned to this film; 0.3 m: 46, 0.8 m: 78) |
+| OKVIS2-X 30 fps, no time limit (BRISK, loop closure) | 65 | 10 mm, 0.6 deg | Mac 0.2x, Pi 5 0.14x real time |
+| OKVIS2-X 30 fps, real-time mode | 191 | 11 mm, 0.8 deg | Mac 0.3x |
+| OKVIS2-X 10 or 15 fps, or gyro-gated frame skipping | lost in the 84 deg/s turn (~1042 s) | 15-19 mm before it | Pi 5 10 fps 300 kp: 1.0x |
+| OpenVINS (4 variants) | lost at ~1042 s (102 before) | | |
+| ORB-SLAM3 | failed (§6) | | |
+
+What it says:
+- **Basalt's poor score was a scale error, not tracking.** Its 1 s steps were 1.52x too long (3.3x
+  at the start). A new point is matched left -> right by KLT starting from one depth guess (2 m);
+  the board is 0.5 m away and repeats, so KLT settles on a neighbouring corner along the epipolar
+  line, which the epipolar check cannot catch, and the average-depth guess keeps the wrong depth.
+- **Our patch** (`rig/slam_patches/basalt-stereo-hypotheses.patch`, loopdesk A165/A166) starts the
+  stereo match from several depths, keeps the lowest patch residual and drops points where a
+  different position matches within 1.6x. Scale is right from the first second and the result no
+  longer depends on the depth guess (0.3 / 0.8 / 2 m all give 11.4-11.5 mm). At full resolution
+  the same depths are too far apart in disparity (28 mm); half resolution is what the Pi runs.
+- **Prefilters gave no robust gain**: OKVIS2 + DoG 68 vs 65 mm, + CLAHE worse; Basalt band-pass
+  1-8 px 143 vs 175 mm but neighbouring bands 178-202 (sensitivity, not a gain). Phase correlation
+  tracked board corners worse than KLT (`tars_scan.track_eval`, report in
+  `reports/Phase matching for visual SLAM.md`).
+- **OKVIS2 needs every frame** to survive fast turns, which the Pi cannot do in real time
+  (stage costs per frame on the Mac: optimise 75 ms, match 60 ms incl. 21 ms loop-closure queries).
+- **One film, one board**: the patch must be confirmed on a room film (start and end at the board
+  to measure drift).
+
+**Dense stereo depth for obstacles** (`tars_scan.stereo_depth`): fisheye pair rectified to a
+virtual pinhole (OpenCV's fisheye stereoRectify gives a degenerate focal length for these lenses),
+semi-global matching, depth inside the board compared with the board plane from ground truth
+(165 frames, board 0.4-0.6 m away).
+
+| Variant | Board pixels with depth | Error median / p90 | Pi 5 per stereo pair |
+|---|---|---|---|
+| 820x616 rectified, 128 disparities | 84% | 1.7 / 8.5 mm | 248 ms |
+| same + band-pass 0.7-4 px | 95% | 1.3 / 3.3 mm | 278 ms |
+| **410x308, 64 disparities, + band-pass 0.5-4 px** | **99%** | **1.7 / 4.1 mm** | **15 ms** |
+| 410x308, no band-pass | 94% | 2.0 / 5.0 mm | 12 ms |
+
+- **Band-pass helps dense matching, robustly**: every band tried (0.7-4 to 2-16 px) raised the
+  matched share from 84% to 90-96% and cut the p90 error from 8.5 to 3.2-4.2 mm. This is where the
+  high-frequency idea pays off: in dark, gain-boosted frames it removes the slow brightness
+  differences between the two cameras that block matching breaks on.
+- **The Pi can afford depth at 10+ Hz next to Basalt** (15 ms per pair). Expected error grows with
+  distance squared: ~7 cm at 3 m for the small variant (0.15 px disparity noise).
+- The board is the easiest possible target (texture everywhere, 0.5 m): plain walls and floors
+  will match worse (loopdesk A167). Needs the room film.
+
+**Fused obstacle map** (`tars_scan.voxel_map`): small-rectification stereo depth (band-pass) every
+6th frame, placed with a pose source, 2 cm voxels kept once 3 frames hit them, scored on the board
+(SLAM world aligned to the board path as for ATE). Picture: `runs/slam/voxel_map_board.png`.
+
+| Poses | Board RMS in the map | Ghost voxels (2-10 cm off) | Board covered |
+|---|---|---|---|
+| ground truth (board PnP) | 1.7 mm | 0% | 83% |
+| **Basalt + stereo hypotheses** | **5.4 mm** | **0%** | 87% |
+| OKVIS2 30 fps | 18.8 mm | 30% | 94% |
+| Basalt stock | 55.2 mm | 79% | 83% |
+
+The pose ranking carries straight into the map: with stock Basalt the board is smeared into a
+~10 cm slab; with the patch it is one clean surface. Not done yet: free space (ray casting), a
+2D cost map for driving, loop closure (Basalt has none), and C++ / on-Pi fusion speed.

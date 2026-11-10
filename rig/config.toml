@@ -3,8 +3,9 @@
 
 [pins]
 button = 17       # momentary button to GND (pin 9); internal pull-up
-led_green = 22    # bicolour LED, 330 ohm per leg, common cathode to GND (pin 14)
-led_red = 27      # set both LED pins to -1 to use the Pi's own green ACT LED instead
+led_green = 27    # a green and a red LED (or one bicolour), 330 ohm each, cathodes to GND
+                  # (pin 14); on the first rig green ended up on pin 13 (GPIO27), red on pin 15
+led_red = 22      # set both LED pins to -1 to use the Pi's own green ACT LED instead
 led_common_anode = false  # true if the LED's common leg goes to 3.3 V (pin 17) instead of GND
 
 [imu]
@@ -24,13 +25,21 @@ jpeg_quality = 90       # grayscale JPEG (the luma plane); SLAM and calibration 
 sync = true             # libcamera software sync: camera 0 server, camera 1 client
 meter_seconds = 1.5     # auto-exposure runs this long on camera 0, then both cameras lock to its values
 max_exposure_us = 6000  # cap to keep motion blur and rolling-shutter skew down; gain makes up the rest
-max_gain = 8.0
+max_gain = 16.0         # above the IMX219's ~10.7x analogue gain the ISP adds digital gain; was 8,
+                        # which left the first calibration ~4x underexposed in a dim room
 queue_frames = 45       # encoder backlog (1.5 s, ~90 MB per camera) before a frame is dropped
 
 [sessions.calibrate]
 cameras = true
 imu = true              # still/moving detection for frame selection, and camera-IMU calibration
 max_minutes = 5
+max_exposure_us = 10000  # the pauses tolerate more blur; blurred frames are skipped by value
+# At each change: solid red 3 s, then 3 slow red flashes; the session stops after the last phase. Times are in phases.json.
+phases = [
+  { name = "move-pause", seconds = 45 },
+  { name = "tilt-45", seconds = 30 },
+  { name = "sweep", seconds = 30 },
+]
 
 [sessions.imu]
 cameras = false

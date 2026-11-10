@@ -6,6 +6,7 @@ SLAM) reads only this.
                        timing (rolling-shutter line time), IMU scale factors
   done.json            how it ended: stop reason, counts, errors
   check.json           the eval of this session (tars_rig.check)
+  phases.json          scripted sessions only: [{name, start_ns, end_ns}], the phases as recorded
   log.txt
   cam0/ cam1/
     frames.mjpeg       every frame as a grayscale JPEG, back to back (one file, not one per frame:

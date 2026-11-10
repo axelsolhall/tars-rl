@@ -50,6 +50,11 @@ class SessionConfig:
     cameras: bool
     imu: bool
     max_minutes: float
+    # Overrides [cameras] max_exposure_us for this session (calibrate: its pauses tolerate more).
+    max_exposure_us: int | None = None
+    # Optional script: [{name, seconds}, ...]. The red LED flashes at each change, and the session
+    # stops by itself after the last one (Axel's calibration film, 2026-11-09).
+    phases: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

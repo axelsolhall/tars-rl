@@ -17,8 +17,10 @@ def rig(tmp_path, monkeypatch):
     cfg = load(CONFIG)
     runs = []
 
-    def runner(cfg, mode, stop):
+    def runner(cfg, mode, stop, on_phase=None):
         runs.append(mode)
+        if on_phase is not None:
+            on_phase("second")
         stop.wait(5)
         return {
             "session": f"x-{mode}",
@@ -48,7 +50,7 @@ def test_arm_press_press_records_once(rig):
     assert rig.leds.history[-1] == "armed"
     rig.press()
     settle(rig)
-    assert rig.recording and rig.leds.history[-1] == "recording"
+    assert rig.recording and rig.leds.history[-2:] == ["phase", "recording"]
     rig.press()
     rig.thread.join(2)
     settle(rig)
@@ -96,3 +98,14 @@ def test_config_loads():
     cfg = load(CONFIG)
     assert cfg.pins.button == 17 and cfg.imu.address == 0x68
     assert set(cfg.sessions) == {"calibrate", "imu", "capture"}
+
+
+def test_phase_plan_and_calibrate_script():
+    from tars_rig.sessions import phase_plan
+
+    assert phase_plan([{"name": "a", "seconds": 60}, {"name": "b", "seconds": 45}]) == [
+        ("a", 60.0),
+        ("b", 105.0),
+    ]
+    script = load(CONFIG).sessions["calibrate"].phases
+    assert [p["seconds"] for p in script] == [45, 30, 30]

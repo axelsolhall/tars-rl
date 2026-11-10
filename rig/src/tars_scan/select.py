@@ -90,8 +90,15 @@ def _cv(obj: np.ndarray, img: np.ndarray | None = None):
     return o, np.ascontiguousarray(img.reshape(1, -1, 2), dtype=np.float64)
 
 
-def calibrate(views: list[View], size: tuple[int, int], K0=None, D0=None):
-    """OpenCV fisheye calibration. Returns (rms_px, K, D) and fills each view's pose."""
+def calibrate(
+    views: list[View], size: tuple[int, int], K0=None, D0=None, fix_high_order: bool = False
+):
+    """OpenCV fisheye calibration. Returns (rms_px, K, D) and fills each view's pose.
+
+    fix_high_order holds k3 and k4 at their start values: a fit on a handful of views leaves them
+    free to blow up at angles those views never reached, and that lens then breaks the pose start
+    of views out there (cv2: InitExtrinsics norm_u1 > 0; the 2026-11-10 film, 8 seed views gave
+    k3 0.69, k4 -1.08)."""
     import cv2
 
     objs, imgs = zip(*(_cv(v.obj, v.img) for v in views), strict=True)
@@ -100,6 +107,8 @@ def calibrate(views: list[View], size: tuple[int, int], K0=None, D0=None):
     flags = cv2.CALIB_RECOMPUTE_EXTRINSIC | cv2.CALIB_FIX_SKEW
     if K0 is not None:
         flags |= cv2.CALIB_USE_INTRINSIC_GUESS
+    if fix_high_order:
+        flags |= cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4
     crit = (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 100, 1e-9)
     rms, K, D, rvecs, tvecs = cv2.fisheye.calibrate(
         list(objs), list(imgs), size, K, D, flags=flags, criteria=crit
@@ -187,14 +196,22 @@ def select_and_calibrate(
     held-out rest."""
     t0 = time.perf_counter()
     seed = views[: min(seed_views, len(views))]
-    _, K, D = calibrate(seed, size, K0, D0)
+    _, K, D = calibrate(seed, size, K0, D0, fix_high_order=True)
     for v in views:
         fit_pose(v, K, D)
     w = np.ones(len(views)) if weights is None else np.asarray(weights, float)
     infos = [wi * view_information(v, K, D) for v, wi in zip(views, w, strict=True)]
     pick = greedy_logdet(infos, budget)
     chosen = [views[i] for i in pick]
-    rms, K, D = calibrate(chosen, size, K, D)
+    import cv2
+
+    try:
+        rms, K1, D1 = calibrate(chosen, size, K, D)
+        held_order = False
+    except cv2.error:  # k3/k4 ran off mid-fit and broke a steep view's pose start: hold them
+        rms, K1, D1 = calibrate(chosen, size, K, D, fix_high_order=True)
+        held_order = True
+    K, D = K1, D1
     held = [v for i, v in enumerate(views) if i not in set(pick)]
     return {
         "K": K,
@@ -203,5 +220,6 @@ def select_and_calibrate(
         "rms_px": rms,
         "heldout_rms_px": reprojection_rms(held, K, D, refit_pose=True) if held else None,
         "heldout_views": len(held),
+        "k3_k4_held": held_order,
         "seconds": time.perf_counter() - t0,
     }

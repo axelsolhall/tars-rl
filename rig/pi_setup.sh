@@ -23,4 +23,12 @@ grep -q '^dtoverlay=imx219,cam0' "$CONFIG" || printf 'dtoverlay=imx219,cam0\ndto
 sudo mkdir -p /srv/rig
 sudo chown "$USER" /srv/rig
 
+# Write recordings to the SD card continuously instead of in bursts. With the default ratios the
+# kernel let ~450 MB pile up and flushed it every ~35 s; appends to half-written pages then waited
+# for the whole flush, stalling the recorders 2-3 s (frames lost, IMU FIFO overflowed). With 16/64 MB
+# a 150 s calibrate session at 2x8 MB/s lost nothing (2026-11-10).
+printf 'vm.dirty_background_bytes = 16777216\nvm.dirty_bytes = 67108864\nvm.dirty_writeback_centisecs = 100\n' \
+  | sudo tee /etc/sysctl.d/90-tars-rig.conf
+sudo systemctl restart systemd-sysctl
+
 echo "done; now: sudo reboot, then rig/deploy.sh on the Mac"

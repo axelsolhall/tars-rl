@@ -41,7 +41,18 @@ def _proc_main(target, args, log_path):
     target(*args)
 
 
-def run_session(cfg: Config, mode: str, stop_event, session_dir: Path | None = None) -> dict:
+def phase_plan(phases: list[dict]) -> list[tuple[str, float]]:
+    """(name, end second) per phase, counted from when the recorders are running."""
+    plan, end = [], 0.0
+    for ph in phases:
+        end += float(ph["seconds"])
+        plan.append((str(ph["name"]), end))
+    return plan
+
+
+def run_session(
+    cfg: Config, mode: str, stop_event, session_dir: Path | None = None, on_phase=None
+) -> dict:
     from .cameras import LENS, meter_exposure, run_camera, sync_mode
     from .imu import run_imu
 
@@ -59,6 +70,7 @@ def run_session(cfg: Config, mode: str, stop_event, session_dir: Path | None = N
         settings=cfg.raw,
     )
     errors: list[str] = []
+    phases: list[dict] = []  # phases.json: name, start_ns, end_ns (CLOCK_MONOTONIC, as the frames)
     stop_reason = "stopped"
     t0 = time.monotonic()
     try:
@@ -76,7 +88,7 @@ def run_session(cfg: Config, mode: str, stop_event, session_dir: Path | None = N
             p.start()
             procs.append(("imu", p))
         if scfg.cameras:
-            exposure, gain = meter_exposure(cfg.cameras)
+            exposure, gain = meter_exposure(cfg.cameras, scfg.max_exposure_us)
             roles = ("server", "client") if cfg.cameras.sync else ("none", "none")
             started = []
             for index in (1, 0):  # the sync client must be running before the server starts
@@ -134,9 +146,27 @@ def run_session(cfg: Config, mode: str, stop_event, session_dir: Path | None = N
             )
         write_json(session / "meta.json", meta)
         cap_s = scfg.max_minutes * 60
+        plan, p0 = phase_plan(scfg.phases), time.monotonic()
+        if plan:
+            phases.append({"name": plan[0][0], "start_ns": time.monotonic_ns(), "end_ns": None})
+            write_json(session / "phases.json", phases)
         while True:
-            if stop_event.wait(0.5):
+            wait = 0.5
+            if plan:
+                wait = min(wait, max(0.01, p0 + plan[len(phases) - 1][1] - time.monotonic()))
+            if stop_event.wait(wait):
                 break
+            if plan and time.monotonic() - p0 >= plan[len(phases) - 1][1]:
+                phases[-1]["end_ns"] = time.monotonic_ns()
+                if len(phases) == len(plan):
+                    stop_reason = "phases done"
+                    break
+                name = plan[len(phases)][0]
+                phases.append({"name": name, "start_ns": phases[-1]["end_ns"], "end_ns": None})
+                write_json(session / "phases.json", phases)
+                log.info("phase %d/%d: %s", len(phases), len(plan), name)
+                if on_phase is not None:
+                    on_phase(name)
             if time.monotonic() - t0 >= cap_s:
                 stop_reason = f"time cap ({scfg.max_minutes} min)"
                 break
@@ -150,6 +180,10 @@ def run_session(cfg: Config, mode: str, stop_event, session_dir: Path | None = N
         errors.append(repr(e))
         stop_reason = "error"
     finally:
+        if phases:
+            if phases[-1]["end_ns"] is None:
+                phases[-1]["end_ns"] = time.monotonic_ns()
+            write_json(session / "phases.json", phases)
         child_stop.set()
         for name, p in procs:
             p.join(15)
