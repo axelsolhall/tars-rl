@@ -97,7 +97,8 @@ def test_status_file(rig):
 def test_config_loads():
     cfg = load(CONFIG)
     assert cfg.pins.button == 17 and cfg.imu.address == 0x68
-    assert set(cfg.sessions) == {"calibrate", "imu", "capture"}
+    assert set(cfg.sessions) == {"calibrate", "imu", "capture", "live"}
+    assert cfg.sessions["live"].live and not cfg.sessions["capture"].live
 
 
 def test_phase_plan_and_calibrate_script():

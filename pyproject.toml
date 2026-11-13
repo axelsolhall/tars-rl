@@ -24,6 +24,10 @@ sim2sim = ["pybullet>=3.2.6; sys_platform == 'linux'"]
 rig = [
     "opencv-python-headless>=5.0.0.93",
     "simplejpeg>=1.9.0",
+    # tars_scan.map_live_view: 3D replay of the map as it is built (native viewer, no browser)
+    "rerun-sdk>=0.42",
+    "scikit-image>=0.26.0",
+    "optuna>=5.0.0",
 ]
 
 [dependency-groups]

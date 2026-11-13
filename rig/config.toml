@@ -28,6 +28,8 @@ max_exposure_us = 6000  # cap to keep motion blur and rolling-shutter skew down;
 max_gain = 16.0         # above the IMX219's ~10.7x analogue gain the ISP adds digital gain; was 8,
                         # which left the first calibration ~4x underexposed in a dim room
 queue_frames = 45       # encoder backlog (1.5 s, ~90 MB per camera) before a frame is dropped
+color_cams = [0]        # colour JPEGs (YCbCr 4:2:0) for the scan mesh's colours; SLAM still reads
+                        # luma only. Gray encode was 10 ms/frame (walk2); colour adds the chroma half
 
 [sessions.calibrate]
 cameras = true
@@ -50,6 +52,19 @@ max_minutes = 120
 cameras = true
 imu = true
 max_minutes = 20
+
+[sessions.live]
+cameras = true
+imu = true
+max_minutes = 20
+live = true             # recorded like capture, and mapped while it records (tars_scan.live_map)
+
+[live]
+viewer_url = "rerun+http://127.0.0.1:9876/proxy"  # the Mac's Rerun viewer, via scripts/rig live's SSH tunnel
+basalt_port = 5077      # tars_live_vio (container tars-live-vio) on the Pi
+# Rolling-shutter fix off on the Pi: with it, walk2 replayed live made Basalt drop 18% of frames
+# (leg error 360 mm); without it, 0 dropped and 190 mm (runs/night/night_log.md, 2026-11-11)
+rs_correct = false
 
 [storage]
 root = "/data"          # the container's mount of /srv/rig on the Pi

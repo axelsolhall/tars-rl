@@ -1,0 +1,97 @@
+<!doctype html><html><head><meta charset="utf-8"><title>__TITLE__</title>
+<style>
+html,body{margin:0;height:100%;background:#121416;color:#d8dde3;font:13px system-ui,sans-serif;overflow:hidden}
+#c{display:block;width:100%;height:100%;cursor:grab}
+#bar{position:absolute;left:0;right:0;bottom:0;padding:8px 14px;background:#1b1e22e0;display:flex;gap:14px;align-items:center}
+#bar input[type=range]{flex:1}
+.lab{position:absolute;top:10px;font:600 22px system-ui;padding:2px 10px;background:#1b1e22c0;border-radius:6px}
+#help{position:absolute;right:12px;top:10px;color:#9aa3ad;text-align:right;line-height:1.5}
+#load{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#9aa3ad}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="lab" id="la" style="left:12px">A</div><div class="lab" id="lb">B</div>
+<div id="help">one camera for both: drag rotate · right/shift-drag pan · scroll zoom<br>
+F: flip A/B in place (full width) · space: split / flip mode · ←/→: snapshot · R: reset view<br>
+red: moving now · yellow: camera path</div>
+<div id="load">loading…</div>
+<div id="bar"><span id="tl">t</span><input id="s" type="range" min="0" max="0" value="0"><span id="info"></span></div>
+<script>
+const META=__META__;  // {names:["A","B"], times:[...], center:[x,y,z], q:scale}
+const gl=document.getElementById('c').getContext('webgl2',{antialias:true});
+const cv=gl.canvas;
+const b64=(s,T)=>{const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new T(u.buffer)};
+// ---- shaders: Lambert with a headlight, vertex colours
+const sh=(t,src)=>{const s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(s);return s};
+const prog=(vs,fs)=>{const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);return p};
+const PM=prog(`#version 300 es
+in vec3 p;in vec3 n;in vec3 c;uniform mat4 M;uniform vec3 eye;out vec3 vc;out float l;
+void main(){gl_Position=M*vec4(p,1.);vec3 d=normalize(eye-p);l=0.35+0.65*abs(dot(normalize(n),d));vc=c;}`,
+`#version 300 es
+precision mediump float;in vec3 vc;in float l;out vec4 o;void main(){o=vec4(vc*l,1.);}`);
+const PP=prog(`#version 300 es
+in vec3 p;uniform mat4 M;uniform float sz;void main(){gl_Position=M*vec4(p,1.);gl_PointSize=sz;}`,
+`#version 300 es
+precision mediump float;uniform vec3 col;out vec4 o;void main(){o=vec4(col,1.);}`);
+// ---- data: one script per (variant, snapshot), loaded when first shown
+const store={};window.__scan=(k,d)=>{store[k]=d};
+const meshes={};
+function load(k){return new Promise(res=>{if(store[k])return res();const s=document.createElement('script');s.src='data/'+k+'.js';s.onload=res;document.head.appendChild(s)})}
+function build(k){
+  if(meshes[k])return meshes[k];const d=store[k];
+  const q=b64(d.v,Int16Array),P=new Float32Array(q.length);for(let i=0;i<q.length;i++)P[i]=q[i]*META.q;
+  const F=b64(d.f,Uint32Array),C8=b64(d.c,Uint8Array),C=new Float32Array(C8.length);for(let i=0;i<C8.length;i++)C[i]=C8[i]/255;
+  const N=new Float32Array(P.length);
+  for(let i=0;i<F.length;i+=3){const a=F[i]*3,b=F[i+1]*3,c=F[i+2]*3;
+    const ux=P[b]-P[a],uy=P[b+1]-P[a+1],uz=P[b+2]-P[a+2],vx=P[c]-P[a],vy=P[c+1]-P[a+1],vz=P[c+2]-P[a+2];
+    const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;for(const j of[a,b,c]){N[j]+=nx;N[j+1]+=ny;N[j+2]+=nz}}
+  const vao=gl.createVertexArray();gl.bindVertexArray(vao);
+  for(const[name,arr]of[['p',P],['n',N],['c',C]]){const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,arr,gl.STATIC_DRAW);
+    const loc=gl.getAttribLocation(PM,name);gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,3,gl.FLOAT,false,0,0)}
+  const ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,F,gl.STATIC_DRAW);
+  const m={vao,n:F.length,faces:F.length/3};
+  for(const[nm,key,pts]of[['dyn','m',d.m],['path','pa',d.pa]]){if(!pts)continue;const pq=b64(pts,Int16Array),pp=new Float32Array(pq.length);for(let i=0;i<pq.length;i++)pp[i]=pq[i]*META.q;
+    const va=gl.createVertexArray();gl.bindVertexArray(va);const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,pp,gl.STATIC_DRAW);
+    const loc=gl.getAttribLocation(PP,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,3,gl.FLOAT,false,0,0);m[nm]={vao:va,n:pp.length/3}}
+  gl.bindVertexArray(null);return meshes[k]=m}
+// ---- camera: orbit around a target, z up, shared by both views
+let yaw=-0.6,pitch=0.7,dist=6,tgt=[0,0,0];const home=()=>{yaw=-0.6;pitch=0.7;dist=META.extent*1.1;tgt=[0,0,0]};home();
+function eye(){return[tgt[0]+dist*Math.cos(pitch)*Math.cos(yaw),tgt[1]+dist*Math.cos(pitch)*Math.sin(yaw),tgt[2]+dist*Math.sin(pitch)]}
+function mvp(aspect){const e=eye(),f=norm(sub(tgt,e)),r=norm(cross(f,[0,0,1])),u=cross(r,f);
+  const V=[r[0],u[0],-f[0],0,r[1],u[1],-f[1],0,r[2],u[2],-f[2],0,-dot(r,e),-dot(u,e),dot(f,e),1];
+  const n=0.02,fa=200,t=1/Math.tan(0.45);const P=[t/aspect,0,0,0,0,t,0,0,0,0,(fa+n)/(n-fa),-1,0,0,2*fa*n/(n-fa),0];return mul(P,V)}
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]],dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],norm=a=>{const l=Math.hypot(...a);return a.map(x=>x/l)};
+function mul(a,b){const o=new Array(16).fill(0);for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)o[j*4+i]+=a[k*4+i]*b[j*4+k];return o}
+let drag=null;cv.oncontextmenu=e=>e.preventDefault();
+cv.onmousedown=e=>{drag={x:e.clientX,y:e.clientY,pan:e.button===2||e.shiftKey};cv.style.cursor='grabbing'};
+window.onmouseup=()=>{drag=null;cv.style.cursor='grab'};
+window.onmousemove=e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+  if(drag.pan){const f=norm(sub(tgt,eye())),r=norm(cross(f,[0,0,1])),u=cross(r,f),s=dist*0.0015;for(let i=0;i<3;i++)tgt[i]+=-r[i]*dx*s+u[i]*dy*s}
+  else{yaw-=dx*0.006;pitch=Math.max(-1.5,Math.min(1.5,pitch+dy*0.006))}draw()};
+cv.onwheel=e=>{e.preventDefault();dist*=Math.exp(e.deltaY*0.0012);draw()};
+// ---- modes and time
+let mode='split',shown=0,snap=META.times.length-1;const S=document.getElementById('s');S.max=META.times.length-1;S.value=snap;
+S.oninput=()=>{snap=+S.value;show()};
+window.onkeydown=e=>{if(e.key==='f'||e.key==='F'){shown^=1;if(mode==='split')mode='flip';draw()}
+  else if(e.key===' '){mode=mode==='split'?'flip':'split';draw();e.preventDefault()}
+  else if(e.key==='ArrowRight'){snap=Math.min(snap+1,META.times.length-1);S.value=snap;show()}
+  else if(e.key==='ArrowLeft'){snap=Math.max(snap-1,0);S.value=snap;show()}
+  else if(e.key==='r'||e.key==='R'){home();draw()}};
+async function show(){document.getElementById('load').style.display='block';
+  await Promise.all(META.names.map(n=>load(n+'_'+snap)));document.getElementById('load').style.display='none';draw()}
+function drawOne(k,x,w,h){const m=build(k);gl.viewport(x,0,w,h);gl.scissor(x,0,w,h);gl.clearColor(.07,.08,.09,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  const M=mvp(w/h);gl.useProgram(PM);gl.uniformMatrix4fv(gl.getUniformLocation(PM,'M'),false,M);gl.uniform3fv(gl.getUniformLocation(PM,'eye'),eye());
+  gl.bindVertexArray(m.vao);gl.drawElements(gl.TRIANGLES,m.n,gl.UNSIGNED_INT,0);
+  gl.useProgram(PP);gl.uniformMatrix4fv(gl.getUniformLocation(PP,'M'),false,M);
+  if(m.path){gl.uniform3fv(gl.getUniformLocation(PP,'col'),[1,.8,0]);gl.uniform1f(gl.getUniformLocation(PP,'sz'),2);gl.bindVertexArray(m.path.vao);gl.drawArrays(gl.LINE_STRIP,0,m.path.n)}
+  if(m.dyn){gl.uniform3fv(gl.getUniformLocation(PP,'col'),[1,.15,.15]);gl.uniform1f(gl.getUniformLocation(PP,'sz'),3);gl.bindVertexArray(m.dyn.vao);gl.drawArrays(gl.POINTS,0,m.dyn.n)}
+  return m}
+function draw(){const k=META.names.map(n=>n+'_'+snap);if(!k.every(x=>store[x]))return;
+  const dpr=devicePixelRatio,W=cv.clientWidth*dpr,H=cv.clientHeight*dpr;cv.width=W;cv.height=H;gl.enable(gl.DEPTH_TEST);gl.enable(gl.SCISSOR_TEST);
+  const la=document.getElementById('la'),lb=document.getElementById('lb');let info;
+  if(mode==='split'){const w=Math.floor(W/2),a=drawOne(k[0],0,w,H),b=drawOne(k[1],w,W-w,H);
+    la.style.display=lb.style.display='block';la.textContent='A';lb.style.left='calc(50% + 12px)';info=`A ${a.faces.toLocaleString()} faces · B ${b.faces.toLocaleString()} faces`}
+  else{const m=drawOne(k[shown],0,W,H);la.style.display='block';lb.style.display='none';la.textContent=META.names[shown]+'  (F flips)';info=`${m.faces.toLocaleString()} faces`}
+  document.getElementById('tl').textContent=`t ${META.times[snap].toFixed(0)} s`;document.getElementById('info').textContent=info}
+window.onresize=draw;show();
+</script></body></html>

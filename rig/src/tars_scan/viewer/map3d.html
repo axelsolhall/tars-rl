@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"><title>__TITLE__</title>
+<style>html,body{margin:0;height:100%;background:#121416;color:#d8dde3;font:13px system-ui,sans-serif;overflow:hidden}
+#c{display:block;width:100%;height:100%;cursor:grab}#i{position:absolute;left:12px;top:10px;pointer-events:none}</style></head>
+<body><canvas id="c"></canvas><div id="i">__N__ voxels (__VOX__) &middot; red = camera path &middot; drag: rotate &middot; scroll: zoom &middot; right-drag or shift-drag: pan &middot; colour = height vs camera (purple low, yellow high)</div>
+<script>
+const dec=s=>new Int16Array(Uint8Array.from(atob(s),c=>c.charCodeAt(0)).buffer);
+const P=dec("__PTS__"),T=dec("__TRJ__"),n=P.length/3;
+// viridis-ish ramp for height -1.4..0.8 m relative to the camera
+const stops=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+const col=new Uint32Array(n);
+for(let k=0;k<n;k++){let t=Math.min(1,Math.max(0,(P[3*k+2]/1000+1.4)/2.2))*4,i=Math.min(3,Math.floor(t)),f=t-i,a=stops[i],b=stops[i+1];
+ col[k]=(255<<24)|((a[2]+(b[2]-a[2])*f)<<16)|((a[1]+(b[1]-a[1])*f)<<8)|(a[0]+(b[0]-a[0])*f);}
+const cv=document.getElementById("c"),g=cv.getContext("2d");
+let W,H,img,buf,zb,yaw=-0.8,pitch=0.6,dist=7,px=0,py=0,pz=-400;
+function size(){W=cv.width=innerWidth*devicePixelRatio;H=cv.height=innerHeight*devicePixelRatio;img=g.createImageData(W,H);buf=new Uint32Array(img.data.buffer);zb=new Float32Array(W*H);draw()}
+function draw(){
+ buf.fill(0xff161412);zb.fill(1e9);
+ const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch),F=Math.min(W,H)*0.9,D=dist*1000;
+ const proj=(x,y,z)=>{x-=px;y-=py;z-=pz;const x1=cy*x-sy*y,y1=sy*x+cy*y;const zc=cp*y1+sp*z+D,yc=-sp*y1+cp*z;return [W/2+F*x1/zc,H/2-F*yc/zc,zc]};
+ for(let k=0;k<n;k++){const r=proj(P[3*k],P[3*k+1],P[3*k+2]);if(r[2]<50)continue;
+  const s=Math.max(1,Math.min(4,(F*20/r[2])|0)),u=r[0]|0,v=r[1]|0;
+  for(let dy=0;dy<s;dy++)for(let dx=0;dx<s;dx++){const xx=u+dx,yy=v+dy;if(xx<0||yy<0||xx>=W||yy>=H)continue;const o=yy*W+xx;if(r[2]<zb[o]){zb[o]=r[2];buf[o]=col[k]}}}
+ g.putImageData(img,0,0);
+ g.strokeStyle="#ff3b3b";g.lineWidth=2*devicePixelRatio;g.beginPath();
+ for(let k=0;k<T.length/3;k++){const r=proj(T[3*k],T[3*k+1],T[3*k+2]);k?g.lineTo(r[0],r[1]):g.moveTo(r[0],r[1])}g.stroke();
+}
+let drag=null;
+cv.addEventListener("contextmenu",e=>e.preventDefault());
+cv.addEventListener("pointerdown",e=>{drag={x:e.clientX,y:e.clientY,pan:e.button===2||e.shiftKey};cv.setPointerCapture(e.pointerId)});
+cv.addEventListener("pointerup",()=>drag=null);
+cv.addEventListener("pointermove",e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+ if(drag.pan){const k=dist*1.5;px-=(Math.cos(yaw)*dx+Math.sin(yaw)*dy*0)*k;py-=(-Math.sin(yaw)*dx)*k;pz+=dy*k}
+ else{yaw+=dx*0.008;pitch=Math.max(-1.5,Math.min(1.5,pitch+dy*0.008))}
+ requestAnimationFrame(draw)});
+cv.addEventListener("wheel",e=>{e.preventDefault();dist=Math.max(0.5,Math.min(30,dist*Math.exp(e.deltaY*0.001)));requestAnimationFrame(draw)},{passive:false});
+addEventListener("resize",size);size();
+</script></body></html>

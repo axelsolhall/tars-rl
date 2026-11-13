@@ -1,4 +1,8 @@
-"""Camera recorder: one process per IMX219, grayscale JPEGs into frames.mjpeg, plus frames.csv.
+"""Camera recorder: one process per IMX219, JPEGs into frames.mjpeg, plus frames.csv.
+
+Grayscale (the luma plane) by default; cameras listed in [cameras] color_cams keep their colour as
+YCbCr 4:2:0 JPEGs, encoded straight from libcamera's YUV420 planes (no colour conversion on the Pi).
+Readers that want gray decode with colorspace="GRAY", which libjpeg-turbo serves from luma alone.
 
 Both cameras run the same sensor mode, frame rate, exposure and gain. With sync on, camera 0 is
 libcamera's sync server and camera 1 its client (Raspberry Pi software camera sync); the client must
@@ -115,15 +119,37 @@ def read_sensor_timing(width: int, height: int) -> dict:
     return {"error": "no imx219 v4l-subdev found"}
 
 
-class FrameWriter:
-    """Encodes queued luma planes to JPEG and appends them to frames.mjpeg; owns frames.csv."""
+def yuv420_planes(arr, w: int, h: int):
+    """(Y, U, V) copies from picamera2's YUV420 array: rows of `stride` bytes holding Y (h rows),
+    then U and V (h/2 rows of stride/2 each, two to an array row)."""
+    s = arr.shape[1]
+    flat = arr.reshape(-1)
+    n_y, n_c = h * s, (h // 2) * (s // 2)
+    y = flat[:n_y].reshape(h, s)[:, :w].copy()
+    u = flat[n_y : n_y + n_c].reshape(h // 2, s // 2)[:, : w // 2].copy()
+    v = flat[n_y + n_c : n_y + 2 * n_c].reshape(h // 2, s // 2)[:, : w // 2].copy()
+    return y, u, v
 
-    def __init__(self, out_dir: Path, quality: int, max_queue: int):
+
+def encode(img, quality: int) -> bytes:
+    """A luma array -> grayscale JPEG; a (Y, U, V) tuple -> YCbCr 4:2:0 colour JPEG."""
+    import simplejpeg
+
+    if isinstance(img, tuple):
+        return simplejpeg.encode_jpeg_yuv_planes(*img, quality=quality)
+    return simplejpeg.encode_jpeg(img[..., None], quality=quality, colorspace="GRAY")
+
+
+class FrameWriter:
+    """Encodes queued frames (luma, or YUV planes) to JPEG, appends them to frames.mjpeg; owns
+    frames.csv."""
+
+    def __init__(self, out_dir: Path, quality: int, max_queue: int, flush_every: int = 30):
         self.f_jpg = open(out_dir / FRAMES_FILE, "wb")
         self.f_csv = open(out_dir / "frames.csv", "w", newline="")
         self.csv = csv.writer(self.f_csv)
         self.csv.writerow(FRAMES_COLUMNS)
-        self.quality, self.lock = quality, threading.Lock()
+        self.quality, self.lock, self.flush_every = quality, threading.Lock(), flush_every
         self.q: queue.Queue = queue.Queue(maxsize=max_queue)
         self.dropped = 0
         self.thread = threading.Thread(target=self._run, name="jpeg", daemon=True)
@@ -139,20 +165,18 @@ class FrameWriter:
                 self.csv.writerow([*row, -1, 0, 0])
 
     def _run(self) -> None:
-        import simplejpeg
-
         n = 0
         while (item := self.q.get()) is not None:
             row, luma = item
             t = time.perf_counter_ns()
-            jpg = simplejpeg.encode_jpeg(luma[..., None], quality=self.quality, colorspace="GRAY")
+            jpg = encode(luma, self.quality)
             enc_us = (time.perf_counter_ns() - t) // 1000
             offset = self.f_jpg.tell()
             self.f_jpg.write(jpg)
             with self.lock:
                 self.csv.writerow([*row, offset, len(jpg), enc_us])
             n += 1
-            if n % 30 == 0:
+            if n % self.flush_every == 0:  # the JPEG first: a visible row's bytes are on disk
                 self.f_jpg.flush()
                 self.f_csv.flush()
 
@@ -172,6 +196,7 @@ def run_camera(
     out_dir: Path,
     stop_event,
     started_event=None,
+    flush_every: int = 30,
 ) -> None:
     from picamera2 import Picamera2
 
@@ -189,7 +214,8 @@ def run_camera(
     elif role != "none":
         log.warning("cam%d: libcamera has no SyncMode; recording unsynced", index)
     h, w = cfg.height, cfg.width
-    writer = FrameWriter(out_dir, cfg.jpeg_quality, cfg.queue_frames)
+    color = index in cfg.color_cams
+    writer = FrameWriter(out_dir, cfg.jpeg_quality, cfg.queue_frames, flush_every)
     i = 0
     try:
         with Picamera2(index) as picam2:
@@ -203,8 +229,9 @@ def run_camera(
                 try:
                     md = request.get_metadata()
                     host_ns = time.monotonic_ns()
-                    # The Y plane; copied so the buffer goes back to libcamera at once.
-                    luma = request.make_array("main")[:h, :w].copy()
+                    # copied so the buffer goes back to libcamera at once
+                    arr = request.make_array("main")
+                    luma = yuv420_planes(arr, w, h) if color else arr[:h, :w].copy()
                 finally:
                     request.release()
                 writer.submit(

@@ -20,7 +20,10 @@ log = logging.getLogger("rig.imu")
 MAX_READ = (FIFO_SIZE // SAMPLE_BYTES) * SAMPLE_BYTES
 
 
-def run_imu(cfg: ImuConfig, out_dir: Path, stop_event, real_rate_out=None, who_out=None) -> None:
+def run_imu(
+    cfg: ImuConfig, out_dir: Path, stop_event, real_rate_out=None, who_out=None, flush=False
+) -> None:
+    """flush: write every read to disk at once (a live session reads the files as they grow)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     chip = Mpu6050(cfg.bus, cfg.address)
     log.info("IMU chip %s (WHO_AM_I 0x%02x)", chip_name(chip.who), chip.who)
@@ -68,6 +71,9 @@ def run_imu(cfg: ImuConfig, out_dir: Path, stop_event, real_rate_out=None, who_o
                 w_imu.writerow([k, anchor_ns + (k - anchor_k) * period_ns, *vals])
                 k += 1
             w_reads.writerow([now, k, n, 0])
+            if flush:
+                f_imu.flush()
+                f_reads.flush()
             if now >= next_temp:
                 w_temp.writerow([now, round(chip.temperature(), 2)])
                 next_temp = now + 1_000_000_000

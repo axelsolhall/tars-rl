@@ -8,7 +8,10 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing as mp
+import shutil
 import socket
+import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +42,34 @@ def _proc_main(target, args, log_path):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     _log_to(log_path)
     target(*args)
+
+
+def start_live_map(cfg: Config, session: Path) -> subprocess.Popen:
+    """The live map for a session being recorded: copy the rig's calibration (<root>/calib,
+    `scripts/rig push-calib`) into the session, then run tars_scan.live_map on it, following the
+    files. It talks to tars_live_vio on this host and streams to the viewer over the SSH tunnel."""
+    live_cfg = cfg.raw.get("live", {})
+    src = cfg.root / "calib"
+    if not (src / "calib.json").exists():
+        raise FileNotFoundError(f"{src}/calib.json missing: run scripts/rig push-calib first")
+    shutil.copytree(src, session / "calib")
+    (session / "live").mkdir()
+    log_f = open(session / "live" / "log.txt", "w")  # noqa: SIM115 — the child owns it
+    cmd = [
+        sys.executable,
+        "-m",
+        "tars_scan.live_map",
+        str(session),
+        "--follow",
+        "--connect",
+        live_cfg.get("viewer_url", "none"),
+        "--basalt-port",
+        str(live_cfg.get("basalt_port", 5077)),
+    ]
+    if not live_cfg.get("rs_correct", False):
+        cmd.append("--no-rs")
+    log.info("live map: %s", " ".join(cmd))
+    return subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT)
 
 
 def phase_plan(phases: list[dict]) -> list[tuple[str, float]]:
@@ -73,7 +104,10 @@ def run_session(
     phases: list[dict] = []  # phases.json: name, start_ns, end_ns (CLOCK_MONOTONIC, as the frames)
     stop_reason = "stopped"
     t0 = time.monotonic()
+    live = None
     try:
+        if scfg.live:
+            live = start_live_map(cfg, session)
         if scfg.imu:
             rate, who = ctx.Value("i", 0), ctx.Value("i", 0)
             p = ctx.Process(
@@ -81,7 +115,7 @@ def run_session(
                 name="imu",
                 args=(
                     run_imu,
-                    (cfg.imu, session / "imu", child_stop, rate, who),
+                    (cfg.imu, session / "imu", child_stop, rate, who, scfg.live),
                     session / "log.txt",
                 ),
             )
@@ -107,6 +141,7 @@ def run_session(
                             session / f"cam{index}",
                             child_stop,
                             ev,
+                            1 if scfg.live else 30,
                         ),
                         session / "log.txt",
                     ),
@@ -133,6 +168,7 @@ def run_session(
                         cfg.cameras.jpeg_quality,
                         timing.get("line_time_ns"),
                         timing.get("readout_us"),
+                        index in cfg.cameras.color_cams,
                     )
                 )
             meta.settings = {**cfg.raw, "lens": LENS}
@@ -170,6 +206,10 @@ def run_session(
             if time.monotonic() - t0 >= cap_s:
                 stop_reason = f"time cap ({scfg.max_minutes} min)"
                 break
+            if live is not None and live.poll() is not None:
+                log.warning("live map exited (code %s); recording goes on", live.returncode)
+                errors.append(f"live map exited with code {live.returncode}")
+                live = None
             dead = [name for name, p in procs if not p.is_alive()]
             if dead:
                 stop_reason = f"recorder died: {', '.join(dead)}"
@@ -199,6 +239,12 @@ def run_session(
             "errors": errors,
         }
         write_json(session / "done.json", done)
+        if live is not None:  # it maps what is left, sees done.json and ends
+            try:
+                live.wait(30)
+            except subprocess.TimeoutExpired:
+                live.terminate()
+                errors.append("live map did not end in 30 s; terminated")
         try:
             report = check.check_session(session)
             write_json(session / "check.json", report)

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# One recorded session -> scan mesh, every step re-run safe (a step is skipped when its output exists).
+#
+#   scripts/scan_session <session dir> [--ref] [--calib <session with calib/>] [--set k=v ...]
+#
+# 1. calib/: copied from --calib (default: walk2, 2026-11-10) when the session has none (Pi sessions
+#    recorded before calibration was pushed had none)
+# 2. export -> runs/slam/<name>-half-rs: half scale, rolling shutter undone with the gyro, auto gain,
+#    camera -> IMU time offset from calib/camimu.json (as walk2-half-rs)
+# 3. Basalt offline (the patched build, walk2's settings) -> runs/slam/out/<name>-b.txt
+# 4. --ref: board detections (runs/night/board_stops.py), then board anchoring at every stop, gravity
+#    up -> runs/slam/out/<name>-anch.txt. The reference scan is about quality: drift is taken out at
+#    each board visit (walk it with many board stops)
+# 5. fuse -> runs/scan/<name>-ref (--ref: scan_mesh's reference preset, all frames and pixels, slow)
+#    or runs/scan/<name> (defaults: the everyday settings)
+# Needs Docker (colima start --memory 4) for Basalt. Heavy steps run under runs/night/guard.sh.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+SESSION=${1:?usage: scripts/scan_session <session dir> [--ref] [--calib dir] [--set k=v ...]}
+shift
+REF=0
+CALIB=runs/rig/20261110-184222-capture
+SETS=()
+while (($#)); do
+  case $1 in
+    --ref) REF=1 ;;
+    --calib) CALIB=$2; shift ;;
+    --set) SETS+=("--set=$2"); shift ;;
+    *) echo "unknown argument $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+NAME=$(basename "$SESSION")
+EXPORT=runs/slam/$NAME-half-rs
+TRAJ=runs/slam/out/$NAME-b.txt
+export PYTHONPATH=rig/src
+PY=.venv/bin/python
+step() { echo "== $(date +%H:%M:%S) $*"; }
+
+if [[ ! -f $SESSION/calib/calib.json ]]; then
+  step "calib from $CALIB"
+  mkdir -p "$SESSION/calib"
+  cp "$CALIB/calib/calib.json" "$CALIB/calib/camimu.json" "$SESSION/calib/"
+fi
+if [[ ! -f $EXPORT/export.json ]]; then
+  OFFSET_NS=$($PY -c "import json;print(round(json.load(open('$SESSION/calib/camimu.json'))['time_offset_ms']*1e6))")
+  step "export ($OFFSET_NS ns offset)"
+  GUARD_MB=6000 runs/night/guard.sh $PY -m tars_scan.export "$SESSION" "$EXPORT" --scale 0.5 \
+    --rs-correct --gain auto --time-offset-ns "$OFFSET_NS" > "$EXPORT.log"
+fi
+if [[ ! -f $TRAJ ]]; then
+  step "Basalt"
+  $PY -m tars_scan.slam_run basalt "$SESSION" "$EXPORT" "$NAME-b" \
+    --set env.TARS_STEREO_DEPTHS=0.25,0.4,0.65,1.0,2,5 --set env.TARS_STEREO_AMBIGUITY=1.6
+fi
+if ((REF)); then
+  ANCH=runs/slam/out/$NAME-anch.txt
+  if [[ ! -f $SESSION/calib/detections_all.npz ]]; then
+    step "board detections"
+    $PY -u runs/night/board_stops.py "$SESSION" 6
+  fi
+  if [[ ! -f $ANCH ]]; then
+    step "board anchoring"
+    $PY -m tars_scan.anchor_poses "$SESSION" "$TRAJ" "$ANCH" | tail -3
+  fi
+  OUT=runs/scan/$NAME-ref
+  [[ -f $OUT/fuse.json ]] || { step "fuse (reference preset: slow)";
+    GUARD_MB=10000 runs/night/guard.sh $PY -m tars_scan.scan_mesh all "$SESSION" "$EXPORT" "$ANCH" \
+      --out "$OUT" --preset reference ${SETS[@]+"${SETS[@]}"} | grep -v "^fuse " ; }
+else
+  OUT=runs/scan/$NAME
+  [[ -f $OUT/fuse.json ]] || { step "fuse";
+    GUARD_MB=6000 runs/night/guard.sh $PY -m tars_scan.scan_mesh all "$SESSION" "$EXPORT" "$TRAJ" \
+      --out "$OUT" ${SETS[@]+"${SETS[@]}"} | grep -v "^fuse " ; }
+fi
+step "done: $OUT"

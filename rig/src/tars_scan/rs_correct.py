@@ -55,6 +55,38 @@ class FisheyeRemap:
         return cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
 
+class LinearRemap:
+    """FisheyeRemap.correct at a fixed line time, linearised in the angular rate: the remap is
+    map0 + J @ omega, with J from central differences once. A rolling-shutter warp is a fraction of
+    a degree, so the second-order error is tiny (test_rs_correct), and a frame costs a few
+    multiply-adds per pixel instead of a fisheye projection of every pixel (98 ms per pair on the
+    Mac with the exact remap: too slow for 30 fps live)."""
+
+    def __init__(self, exact: FisheyeRemap, line_time_s: float, eps: float = 0.5):
+        self.line_time_s = line_time_s
+        self.m0 = [m.astype(np.float32) for m in exact.maps(np.zeros(3), line_time_s)]
+        self.J = []  # per axis: (d map_x / d omega, d map_y / d omega)
+        for i in range(3):
+            e = np.zeros(3)
+            e[i] = eps
+            plus, minus = exact.maps(e, line_time_s), exact.maps(-e, line_time_s)
+            self.J.append(
+                [((a - b) / (2 * eps)).astype(np.float32) for a, b in zip(plus, minus, strict=True)]
+            )
+
+    def maps(self, omega_cam: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        w = np.asarray(omega_cam, np.float32)
+        mx = self.m0[0] + w[0] * self.J[0][0] + w[1] * self.J[1][0] + w[2] * self.J[2][0]
+        my = self.m0[1] + w[0] * self.J[0][1] + w[1] * self.J[1][1] + w[2] * self.J[2][1]
+        return mx, my
+
+    def correct(self, img: np.ndarray, omega_cam: np.ndarray) -> np.ndarray:
+        import cv2
+
+        mx, my = self.maps(omega_cam)
+        return cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+
+
 def shift_px(K: np.ndarray, omega_cam: np.ndarray, readout_s: float) -> float:
     """Rough top-to-bottom skew in pixels at the image centre: what the correction removes."""
     return float(np.linalg.norm(omega_cam[:2]) * readout_s * K[0, 0])

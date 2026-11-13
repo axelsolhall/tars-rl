@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Automatic scan-mesh tuning against a reference scan: tars_scan.scan_autotune (see its docstring).
+cd "$(dirname "$0")/.."
+PYTHONPATH=rig/src exec .venv/bin/python -m tars_scan.scan_autotune "$@"

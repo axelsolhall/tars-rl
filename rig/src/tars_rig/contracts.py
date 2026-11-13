@@ -9,8 +9,9 @@ SLAM) reads only this.
   phases.json          scripted sessions only: [{name, start_ns, end_ns}], the phases as recorded
   log.txt
   cam0/ cam1/
-    frames.mjpeg       every frame as a grayscale JPEG, back to back (one file, not one per frame:
-                       far fewer SD-card metadata writes, and one file to copy); ffplay plays it
+    frames.mjpeg       every frame as a JPEG (grayscale, or YCbCr 4:2:0 when meta "color"), back
+                       to back (one file, not one per frame: far fewer SD-card metadata writes,
+                       and one file to copy); ffplay plays it
     frames.csv         one row per frame: timestamps, exposure, and where its JPEG sits in
                        frames.mjpeg (offset -1: dropped because the encoder fell behind)
     sensor.json        the sensor's line timing, read from its V4L2 controls while streaming
@@ -65,6 +66,7 @@ class CameraMeta:
     # Rolling shutter: row r starts exposing line_time_ns * r after row 0. None if unreadable.
     line_time_ns: float | None = None
     readout_us: float | None = None
+    color: bool = False  # frames are colour JPEGs (decode with colorspace="GRAY" for luma)
 
 
 @dataclass

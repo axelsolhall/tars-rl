@@ -188,11 +188,12 @@ def run_okvis2(session, dataset, name, overrides, scale, imu) -> dict:
     run_dir = ROOT / "out" / f"{name}-okvis"
     run_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
+    # The runtime image (run-okvis: the binary plus its vocabulary as the entrypoint) also runs on
+    # the Mac; the 4 GB build image is only needed to rebuild OKVIS2.
     proc = _docker(
-        "slam-vio2-deps",
-        ["slam-okvis-build:/build", f"{ROOT}:/work", f"{dataset.resolve()}:/data"],
+        "slam-okvis-run",
+        [f"{ROOT}:/work", f"{dataset.resolve()}:/data"],
         [
-            "/build/okvis_app_synchronous",
             f"/work/cfg/{name}/okvis2.yaml",
             "/data/mav0",
             f"/work/out/{name}-okvis",

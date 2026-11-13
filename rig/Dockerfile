@@ -21,7 +21,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
     python3-picamera2 python3-libcamera libcamera-ipa python3-simplejpeg python3-numpy \
     python3-gpiozero python3-lgpio python3-pip i2c-tools v4l-utils \
- && pip install --break-system-packages --no-cache-dir smbus2==0.5.0 \
+    python3-opencv python3-scipy \
+ && pip install --break-system-packages --no-cache-dir smbus2==0.5.0 rerun-sdk==0.42.0 \
  && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -29,6 +30,7 @@ COPY config.toml /app/config.toml
 COPY src /app/src
 RUN printf '#!/bin/sh\nexec python3 -m tars_rig "$@"\n' > /usr/local/bin/rig \
  && chmod +x /usr/local/bin/rig \
- && python3 -c "import picamera2, gpiozero, lgpio, smbus2, simplejpeg, tars_rig.cli"
+ && python3 -c "import picamera2, gpiozero, lgpio, smbus2, simplejpeg, tars_rig.cli" \
+ && python3 -c "import cv2, scipy, rerun, tars_scan.live_map"
 
 CMD ["rig", "daemon"]

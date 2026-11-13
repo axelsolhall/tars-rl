@@ -74,10 +74,10 @@ def rectifier(session: Path, scale: float, size: tuple[int, int], out: float = 1
     return {"maps": maps, "R1": R1, "P1": P1, "f": P1[0, 0], "baseline": -P2[0, 3] / P2[0, 0]}
 
 
-def matcher(num_disp: int = NUM_DISP):
+def matcher(num_disp: int = NUM_DISP, block: int = 5):
     import cv2
 
-    bs = 5
+    bs = block
     return cv2.StereoSGBM_create(
         minDisparity=0,
         numDisparities=num_disp,
@@ -131,8 +131,14 @@ def board_truth(rect: dict, R_bc: np.ndarray, p_bc: np.ndarray, corners: np.ndar
 
 
 def evaluate(
-    session: Path, export_dir: Path, step: int, band: tuple[float, float] | None, small: bool
+    session: Path,
+    export_dir: Path,
+    step: int,
+    band: tuple[float, float] | None,
+    small: bool,
+    depth_fn=None,
 ) -> dict:
+    """depth_fn: another depth method with depth()'s signature (phase_stereo plugs in here)."""
     import cv2
 
     cal = json.loads((session / "calib" / "calib.json").read_text())
@@ -159,7 +165,7 @@ def evaluate(
         left = cv2.imread(str(files[t]), cv2.IMREAD_GRAYSCALE)
         right = cv2.imread(str(export_dir / "mav0" / "cam1" / "data" / files[t].name), 0)
         t0 = time.perf_counter()
-        z = depth(rect, sgbm, left, right, band)
+        z = (depth_fn or depth)(rect, sgbm, left, right, band)
         ms.append((time.perf_counter() - t0) * 1000)
         mask, z_true = board_truth(rect, R_gt[i], p_gt[i], corners, z.shape)
         if mask is None:

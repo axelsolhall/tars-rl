@@ -64,6 +64,19 @@ def _decode(jpeg: bytes, scale: float) -> np.ndarray:
     )[..., 0]
 
 
+def _decode_rgb(jpeg: bytes, scale: float) -> np.ndarray:
+    """Colour frame as BGR (OpenCV order) at the same size _decode gives."""
+    import simplejpeg
+
+    h, w = simplejpeg.decode_jpeg_header(jpeg)[:2]
+    kw = (
+        {}
+        if scale >= 1
+        else {"min_height": math.ceil(h * scale), "min_width": math.ceil(w * scale)}
+    )
+    return simplejpeg.decode_jpeg(jpeg, colorspace="BGR", **kw)
+
+
 def export_imu(session: Path, meta: dict, out: Path) -> dict:
     imu, reads = read_csv(session / "imu" / "imu.csv"), read_csv(session / "imu" / "reads.csv")
     segs = imu_clock_segments(reads)
@@ -190,19 +203,29 @@ def export_session(
             f = frames[cam]
             jpeg_rows = ((int(f["index"][r]), int(f["offset"][r]), int(f["size"][r])) for r in rows)
             by_index = {int(f["index"][r]): int(r) for r in rows}
+            # colour sessions: cam0 also as colour JPEGs in mav0/cam0/color/ (the scan mesh's
+            # colours); data/ stays the gray luma that SLAM reads, bit for bit as before
+            color = cam == 0 and bool(cams[cam].get("color"))
+            if color:
+                (mav / "cam0" / "color").mkdir(exist_ok=True)
             with open(mav / f"cam{cam}" / "data.csv", "w") as csv_out:
                 csv_out.write("#timestamp [ns],filename\n")
                 for index, jpeg in iter_jpegs(session / f"cam{cam}", jpeg_rows):
                     ts = stamps[by_index[index]]
-                    img = _decode(jpeg, scale)
+                    imgs = [_decode(jpeg, scale)] + ([_decode_rgb(jpeg, scale)] if color else [])
                     if rs is not None:
                         rsc, t_g, w_c0, R_c1_c0, remaps, readout_s, line_s = rs
                         t_img = ts  # already in the IMU clock
                         w = rsc.mean_rate(
                             t_g, w_c0, t_img - readout_s * 5e8, t_img + readout_s * 5e8
                         )
-                        img = remaps[cam].correct(img, w if cam == 0 else R_c1_c0 @ w, line_s)
-                    cv2.imwrite(str(d / f"{ts}.png"), img if lut is None else lut[img])
+                        w = w if cam == 0 else R_c1_c0 @ w
+                        imgs = [remaps[cam].correct(im, w, line_s) for im in imgs]
+                    if lut is not None:
+                        imgs = [lut[im] for im in imgs]
+                    cv2.imwrite(str(d / f"{ts}.png"), imgs[0])
+                    if color:
+                        cv2.imwrite(str(mav / "cam0" / "color" / f"{ts}.jpg"), imgs[1])
                     csv_out.write(f"{ts},{ts}.png\n")
     if meta.get("imu"):
         report["imu"] = export_imu(session, meta, mav)

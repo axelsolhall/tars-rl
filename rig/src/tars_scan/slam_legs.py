@@ -6,7 +6,8 @@ A walk film has the board only at its stops (board, room, board, ...), so slam_e
 board frames mostly scores the stops themselves. This scores what happens between them instead.
 
 - Stops: runs of board frames (slam_eval.ground_truth), split where more than STOP_GAP_S passes
-  without the board. A stop's pose is its middle frame that the SLAM also tracked.
+  without the board, with at least MIN_STOP_FRAMES frames the SLAM tracked. A stop's pose is the
+  middle one of those.
 - Leg k (stop k -> stop k+1): the camera's motion between the two stops as the board measures it
   vs as the SLAM measures it (both in the frame of stop k, so no alignment is needed). Error =
   |translation difference| in mm and the rotation difference in degrees; leg length is the SLAM's
@@ -29,6 +30,9 @@ from .slam_calib import rig_model
 from .slam_eval import ground_truth, read_tum
 
 STOP_GAP_S = 2.0
+# a stop the SLAM tracked for fewer frames is a glimpse or its own start-up (2026-11-10 walk: the
+# first stop fell in Basalt's first 2 frames, before sync lock, and read 13 deg of 'drift')
+MIN_STOP_FRAMES = 10
 MAX_DT_NS = 2e6
 
 
@@ -48,6 +52,20 @@ def _error(gt, es) -> tuple[float, float]:
     return dt, dr
 
 
+def _turn_rate_dps(t_es, R_wc, a: int, b: int, window_s: float = 0.1) -> tuple[float, float]:
+    """(median, p95) of the camera's turn rate over SLAM poses a..b, in deg/s, from orientations
+    window_s apart: how smooth or jerky a leg was (Axel walked some legs jerky on purpose)."""
+    a, b = min(a, b), max(a, b)
+    dt = np.median(np.diff(t_es[a : b + 1])) / 1e9 if b > a else 0
+    k = max(1, int(round(window_s / dt))) if dt > 0 else 1
+    if b - a <= k:
+        return 0.0, 0.0
+    rel = np.einsum("nji,njk->nik", R_wc[a : b + 1 - k], R_wc[a + k : b + 1])
+    ang = np.degrees(np.linalg.norm(Rotation.from_matrix(rel).as_rotvec(), axis=1))
+    rate = ang / ((t_es[a + k : b + 1] - t_es[a : b + 1 - k]) / 1e9)
+    return float(np.median(rate)), float(np.percentile(rate, 95))
+
+
 def legs(t_gt, R_gt, p_gt, t_es, R_wc, p_wc) -> dict:
     """Per-leg and return errors; inputs are camera-0 poses (board frame / SLAM world)."""
     j = np.clip(np.searchsorted(t_es, t_gt), 1, len(t_es) - 1)
@@ -56,7 +74,7 @@ def legs(t_gt, R_gt, p_gt, t_es, R_wc, p_wc) -> dict:
     picked = []  # (gt index, slam index, start s, frames) per stop the SLAM tracked
     for run in stops(t_gt):
         run = run[ok[run]]
-        if len(run):
+        if len(run) >= MIN_STOP_FRAMES:
             g = run[len(run) // 2]
             picked.append((g, j[g], (t_gt[g] - t_gt[0]) / 1e9, len(run)))
     out_legs, out_ret = [], []
@@ -69,6 +87,7 @@ def legs(t_gt, R_gt, p_gt, t_es, R_wc, p_wc) -> dict:
             )
             seg = p_wc[min(ea, eb) : max(ea, eb) + 1]
             path = float(np.sum(np.linalg.norm(np.diff(seg, axis=0), axis=1)))
+            rate_med, rate_p95 = _turn_rate_dps(t_es, R_wc, ea, eb)
             dest.append(
                 {
                     "from_s": round(ta, 1),
@@ -76,6 +95,8 @@ def legs(t_gt, R_gt, p_gt, t_es, R_wc, p_wc) -> dict:
                     "path_m": round(path, 2),
                     "err_mm": round(dt * 1000, 1),
                     "err_deg": round(dr, 2),
+                    "turn_dps_median": round(rate_med, 1),
+                    "turn_dps_p95": round(rate_p95, 1),
                 }
             )
     e = np.array([x["err_mm"] for x in out_legs])

@@ -10,7 +10,7 @@ from pathlib import Path
 DEFAULT_PATH = Path(
     os.environ.get("RIG_CONFIG", Path(__file__).resolve().parents[2] / "config.toml")
 )
-MODES = ("calibrate", "imu", "capture")
+MODES = ("calibrate", "imu", "capture", "live")
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ class CameraConfig:
     max_exposure_us: int
     max_gain: float
     queue_frames: int = 45  # frames the encoder may fall behind before one is dropped
+    color_cams: list[int] = field(default_factory=list)  # cameras recorded in colour (YCbCr 4:2:0)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,9 @@ class SessionConfig:
     cameras: bool
     imu: bool
     max_minutes: float
+    # live: recorders flush every frame / IMU read and tars_scan.live_map maps the session while
+    # it records, streaming to the viewer at [live] viewer_url (scripts/rig live)
+    live: bool = False
     # Overrides [cameras] max_exposure_us for this session (calibrate: its pauses tolerate more).
     max_exposure_us: int | None = None
     # Optional script: [{name, seconds}, ...]. The red LED flashes at each change, and the session

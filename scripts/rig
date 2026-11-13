@@ -8,6 +8,8 @@
 #   scripts/rig check <session dir>                   the session eval, here on the Mac
 #   scripts/rig export <session dir> <out> [--scale]  EuRoC layout for SLAM and calibration tools
 #   scripts/rig logs | shell                          the container's log, or a shell in it
+#   scripts/rig push-calib <session dir>              its calib/ becomes the rig's calibration (live maps)
+#   scripts/rig live                                  viewer here + tunnel, arm live; press the button
 set -euo pipefail
 
 HOST=${RIG_HOST:-axel@tars-rig.local}
@@ -19,6 +21,15 @@ case ${1:-status} in
   check) shift; PYTHONPATH="$REPO/rig/src" exec "$REPO/.venv/bin/python" -m tars_rig check "$@" ;;
   export) shift; PYTHONPATH="$REPO/rig/src" exec "$REPO/.venv/bin/python" -m tars_scan.export "$@" ;;
   logs) exec ssh "$HOST" docker logs -f --tail 100 tars-rig ;;
+  push-calib)
+    [[ -f ${2:-}/calib/calib.json && -f $2/calib/camimu.json ]] || { echo "usage: rig push-calib <session with calib/>" >&2; exit 1; }
+    ssh "$HOST" "mkdir -p /srv/rig/calib" && scp "$2/calib/calib.json" "$2/calib/camimu.json" "$HOST:/srv/rig/calib/" && echo "calibration pushed" ;;
+  live)
+    # The viewer on this Mac; the Pi reaches it on its own localhost:9876 through this SSH tunnel,
+    # which stays open until Ctrl-C. Each live session is also recorded (scripts/rig pull).
+    "$REPO/.venv/bin/rerun" --port 9876 >/dev/null 2>&1 &
+    ssh -t -o ExitOnForwardFailure=yes -R 9876:localhost:9876 "$HOST" \
+      'docker exec tars-rig rig arm live && echo "press the button to start, again to stop; Ctrl-C closes the tunnel" && sleep infinity' ;;
   shell) exec ssh -t "$HOST" docker exec -it tars-rig bash ;;
   *) exec ssh -t "$HOST" docker exec -t tars-rig rig "$@" ;;
 esac
